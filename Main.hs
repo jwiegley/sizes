@@ -25,7 +25,7 @@ import           Text.Printf
 default (Int, Text)
 
 version :: String
-version = "1.0.0"
+version = "1.0.1"
 
 copyright :: String
 copyright = "2012"
@@ -64,14 +64,14 @@ data EntryInfo = EntryInfo { _entryPath  :: !FilePath
                            , _entryIsDir :: !Bool }
              deriving Show
 
+makeLenses ''EntryInfo
+
 instance NFData EntryInfo where
   rnf a = a `seq` ()
 
 newEntry :: FilePath -> Bool -> EntryInfo
-newEntry p isDir = EntryInfo p 0 0 isDir
-
-makeLenses ''EntryInfo
-
+newEntry p = EntryInfo p 0 0
+
 main :: IO ()
 main = do
   mainArgs <- getArgs
@@ -84,9 +84,6 @@ runSizes :: SizesOpts -> IO ()
 runSizes opts = do
   reportSizes opts $ map (fromText . pack) (dirs opts)
   stopGlobalPool
-
-parMap :: (a -> IO b) -> [a] -> IO ()
-parMap f xs = parallel (map f xs) >> return ()
 
 reportSizes :: SizesOpts -> [FilePath] -> IO ()
 reportSizes opts xs = do
@@ -118,7 +115,7 @@ reportEntry entry =
             (humanReadable (entry^.entrySize)) (entry^.entryCount) path
             (unpack $ if entry^.entryIsDir && L.last path /= '/'
                       then "/" else "")
-
+
 toTextIgnore :: FilePath -> Text
 toTextIgnore p = case toText p of Left _ -> ""; Right x -> x
 
@@ -126,7 +123,7 @@ gatherSizesW :: Int -> Int -> FilePath -> IO (EntryInfo, [EntryInfo])
 gatherSizesW m d p =
   catch (gatherSizes m d p)
         (\e -> do
-            putStrLn $ show (e :: IOException)
+            print (e :: IOException)
             return (newEntry p False, []))
 
 gatherSizes :: Int -> Int -> FilePath -> IO (EntryInfo, [EntryInfo])
@@ -149,12 +146,12 @@ gatherSizes maxDepth curDepth path = do
                          (newEntry path True)
                          firsts
                  , if curDepth < maxDepth
-                   then firsts ++ L.concat (map snd entries)
+                   then firsts ++ L.concatMap snd entries
                    else [] )
     else
     if isRegularFile status
       then return ( entryCount .~ 1 $
-                    entrySize .~ fromIntegral (fileSize status) $
+                    entrySize  .~ fromIntegral (fileSize status) $
                     newEntry path False, [] )
       else return (newEntry path False, [])
 
