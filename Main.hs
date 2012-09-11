@@ -22,10 +22,10 @@ import           System.Environment (getArgs, withArgs)
 import           System.Posix.Files
 import           Text.Printf
 
-default (Int, Text)
+default (Integer, Text)
 
 version :: String
-version = "1.0.1"
+version = "1.0.2"
 
 copyright :: String
 copyright = "2012"
@@ -59,8 +59,8 @@ sizesOpts = SizesOpts
     help "Calculate amount of disk used by the given directories"
 
 data EntryInfo = EntryInfo { _entryPath  :: !FilePath
-                           , _entryCount :: !Int
-                           , _entrySize  :: !Int
+                           , _entryCount :: !Integer
+                           , _entrySize  :: !Integer
                            , _entryIsDir :: !Bool }
              deriving Show
 
@@ -98,7 +98,7 @@ reportSizes opts xs = do
          || entry^.entryCount > 100)
          $ reportEntry entry
 
-humanReadable :: Int -> String
+humanReadable :: Integer -> String
 humanReadable x
   | x < 1024   = printf "%db" x
   | x < 1024^2 = printf "%.0fK" (fromIntegral x / (1024 :: Double))
@@ -106,7 +106,8 @@ humanReadable x
   | x < 1024^4 = printf "%.2fG" (fromIntegral x / (1024^3 :: Double))
   | x < 1024^5 = printf "%.3fT" (fromIntegral x / (1024^4 :: Double))
   | x < 1024^6 = printf "%.3fP" (fromIntegral x / (1024^5 :: Double))
-  | otherwise  = error "Too large"
+  | x < 1024^7 = printf "%.3fX" (fromIntegral x / (1024^6 :: Double))
+  | otherwise  = printf "%db" x
 
 reportEntry :: EntryInfo -> IO ()
 reportEntry entry =
