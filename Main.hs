@@ -21,11 +21,12 @@ import           System.Console.CmdArgs
 import           System.Environment (getArgs, withArgs)
 import           System.Posix.Files
 import           Text.Printf
+import           Text.Regex.Posix
 
 default (Integer, Text)
 
 version :: String
-version = "1.0.2"
+version = "1.1.1"
 
 copyright :: String
 copyright = "2012"
@@ -35,6 +36,9 @@ sizesSummary = "sizes v" ++ version ++ ", (C) John Wiegley " ++ copyright
 
 data SizesOpts = SizesOpts { jobs      :: Int
                            , byCount   :: Bool
+                           , exclude   :: String
+                           , minSize   :: Integer
+                           , minCount  :: Integer
                            , smalls    :: Bool
                            -- , dirsOnly  :: Bool
                            , depth     :: Int
@@ -45,9 +49,15 @@ sizesOpts :: SizesOpts
 sizesOpts = SizesOpts
     { jobs     = def &= name "j" &= typ "INT"
                      &= help "Run INT concurrent finds at once (default: 2)"
-    , byCount  = def &= typ "BOOL"
+    , byCount  = def &= name "c" &= typ "BOOL"
                      &= help "Sort output by count (default: by size)"
-    , smalls   = def &= typ "BOOL"
+    , exclude  = def &= name "x" &= typ "REGEX"
+                     &= help "Sort output by count (default: by size)"
+    , minSize  = def &= name "m" &= typ "INT"
+                     &= help "Smallest entries to show, in MB (default: 10)"
+    , minCount = def &= name "M" &= typ "INT"
+                     &= help "Smallest entries to show, in count (default: 100)"
+    , smalls   = def &= name "s" &= typ "BOOL"
                      &= help "Also show small (<1M && <100 files) entries"
     -- , dirsOnly = def &= typ "BOOL"
     --                  &= help "Show directories only"
@@ -87,16 +97,20 @@ runSizes opts = do
 
 reportSizes :: SizesOpts -> [FilePath] -> IO ()
 reportSizes opts xs = do
-  entryInfos <- parallel $ map (gatherSizesW (depth opts) 0) xs
+  entryInfos <- parallel $ map (gatherSizesW opts 0) xs
   let infos  = map fst entryInfos ++ mconcat (map snd entryInfos)
       sorted = L.sortBy ((compare `on`) $ if byCount opts
                                           then (^. entryCount)
                                           else (^. entrySize)) infos
   forM_ sorted $ \entry ->
     when ( smalls opts
-         || entry^.entrySize >= 10 * 1024^2
-         || entry^.entryCount > 100)
+         || entry^.entrySize >= minSize'
+         || entry^.entryCount >= minCount')
          $ reportEntry entry
+
+  where
+    minSize'  = (if minSize opts == 0 then 10 else minSize opts) * 1024^2
+    minCount' = (if minCount opts == 0 then 100 else minCount opts)
 
 humanReadable :: Integer -> String
 humanReadable x
@@ -112,7 +126,7 @@ humanReadable x
 reportEntry :: EntryInfo -> IO ()
 reportEntry entry =
   let path = unpack . toTextIgnore $ entry^.entryPath
-  in printf (unpack "%10s %10d %s%s\n")
+  in printf (unpack "%10s %10d  %s%s\n")
             (humanReadable (entry^.entrySize)) (entry^.entryCount) path
             (unpack $ if entry^.entryIsDir && L.last path /= '/'
                       then "/" else "")
@@ -120,40 +134,49 @@ reportEntry entry =
 toTextIgnore :: FilePath -> Text
 toTextIgnore p = case toText p of Left _ -> ""; Right x -> x
 
-gatherSizesW :: Int -> Int -> FilePath -> IO (EntryInfo, [EntryInfo])
-gatherSizesW m d p =
-  catch (gatherSizes m d p)
+gatherSizesW :: SizesOpts -> Int -> FilePath -> IO (EntryInfo, [EntryInfo])
+gatherSizesW opts d p =
+  catch (gatherSizes opts d p)
         (\e -> do
             print (e :: IOException)
             return (newEntry p False, []))
 
-gatherSizes :: Int -> Int -> FilePath -> IO (EntryInfo, [EntryInfo])
-gatherSizes maxDepth curDepth path = do
-  let path' = unpack $ toTextIgnore path
+gatherSizes :: SizesOpts -> Int -> FilePath -> IO (EntryInfo, [EntryInfo])
+gatherSizes opts curDepth path = do
   status <- if curDepth == 0
             then getFileStatus path'
             else getSymbolicLinkStatus path'
-  if isDirectory status
-    then do
-      files   <- listDirectory path
-      entries <- let func = gatherSizesW maxDepth (curDepth + 1) . collapse
-                 in if curDepth == 0
-                    then parallel $ map func files
-                    else mapM func files
-      let firsts = map fst entries
-      return $!! ( L.foldl' (\current entry ->
-                           entryCount +~ entry^.entryCount $
-                           entrySize  +~ entry^.entrySize  $ current)
-                         (newEntry path True)
-                         firsts
-                 , if curDepth < maxDepth
-                   then firsts ++ L.concatMap snd entries
-                   else [] )
-    else
-    if isRegularFile status
-      then return ( entryCount .~ 1 $
-                    entrySize  .~ fromIntegral (fileSize status) $
-                    newEntry path False, [] )
-      else return (newEntry path False, [])
+  gatherSizes' status
+
+  where
+    path' = unpack $ toTextIgnore path
+
+    gatherSizes' status
+      | (exclude opts) /= "" && path' =~ exclude opts = returnEmpty
+
+      | isDirectory status = do
+        files   <- listDirectory path
+        entries <- let func = gatherSizesW opts (curDepth + 1) . collapse
+                   in if curDepth == 0
+                      then parallel $ map func files
+                      else mapM func files
+        let firsts = map fst entries
+        return $!! ( L.foldl' (\current entry ->
+                             entryCount +~ entry^.entryCount $
+                             entrySize  +~ entry^.entrySize  $ current)
+                           (newEntry path True)
+                           firsts
+                   , if curDepth < depth opts
+                     then firsts ++ L.concatMap snd entries
+                     else [] )
+
+      | isRegularFile status =
+        return (entryCount .~ 1 $
+                entrySize  .~ fromIntegral (fileSize status) $
+                newEntry path False, [])
+
+      | otherwise = returnEmpty
+
+    returnEmpty = return (newEntry path False, [])
 
 -- Main.hs (sizes) ends here
