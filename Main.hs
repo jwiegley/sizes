@@ -26,7 +26,7 @@ import           Text.Regex.Posix
 default (Integer, Text)
 
 version :: String
-version = "1.1.1"
+version = "1.2.0"
 
 copyright :: String
 copyright = "2012"
@@ -166,7 +166,7 @@ gatherSizes opts curDepth path = do
                              entrySize  +~ entry^.entrySize  $ current)
                            (newEntry path True)
                            firsts
-                   , if curDepth < depth opts
+                   , if curDepth <= depth opts
                      then firsts ++ L.concatMap snd entries
                      else [] )
 
