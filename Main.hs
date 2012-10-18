@@ -84,7 +84,7 @@ data EntryInfo = EntryInfo { _entryPath       :: !FilePath
                            , _entryActualSize :: !Integer
                            , _entryAllocSize  :: !Integer
                            , _entryIsDir      :: !Bool }
-             deriving Show
+               deriving Show
 
 makeLenses ''EntryInfo
 
