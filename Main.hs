@@ -1,7 +1,6 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE DeriveDataTypeable #-}
 {-# LANGUAGE TemplateHaskell #-}
-{-# LANGUAGE ScopedTypeVariables #-}
 
 module Main where
 
@@ -15,7 +14,7 @@ import           Data.Function
 import qualified Data.List as L
 import           Data.Monoid
 import           Data.Text as T hiding (filter, map, chunksOf)
-import           Filesystem (listDirectory)
+import           Filesystem (listDirectory, isFile)
 import           Filesystem.Path.CurrentOS
 import           GHC.Conc
 import           Prelude hiding (FilePath, sequence)
@@ -31,7 +30,7 @@ import Debug.Trace
 default (Integer, Text)
 
 version :: String
-version = "2.0.0"
+version = "2.0.1"
 
 copyright :: String
 copyright = "2012"
@@ -41,7 +40,8 @@ sizesSummary = "sizes v" ++ version ++ ", (C) John Wiegley " ++ copyright
 
 data SizesOpts = SizesOpts { jobs         :: Int
                            , byCount      :: Bool
-                           , annexAware   :: Bool
+                           , annex        :: Bool
+                           , apparent     :: Bool
                            , exclude      :: String
                            , minSize      :: Integer
                            , minCount     :: Integer
@@ -58,8 +58,10 @@ sizesOpts = SizesOpts
                        &= help "Run INT concurrent finds at once (default: 2)"
     , byCount    = def &= name "c" &= typ "BOOL"
                        &= help "Sort output by count (default: by size)"
-    , annexAware = def &= name "A" &= typ "BOOL"
+    , annex      = def &= name "A" &= typ "BOOL"
                        &= help "Be mindful of how git-annex stores files"
+    , apparent   = def &= typ "BOOL"
+                       &= help "Print apparent sizes, rather than disk usage"
     , exclude    = def &= name "x" &= typ "REGEX"
                        &= help "Sort output by count (default: by size)"
     , minSize    = def &= name "m" &= typ "INT"
@@ -97,14 +99,16 @@ newEntry p = EntryInfo p 0 0 0
 main :: IO ()
 main = do
   mainArgs <- getArgs
-  opts     <- withArgs (if L.null mainArgs then ["."] else mainArgs)
+  opts     <- withArgs (if L.null mainArgs then [] else mainArgs)
                        (cmdArgs sizesOpts)
   _        <- GHC.Conc.setNumCapabilities $ case jobs opts of 0 -> 2; x -> x
   runSizes opts
 
 runSizes :: SizesOpts -> IO ()
 runSizes opts = do
-  reportSizes opts $ map (fromText . pack) (dirs opts)
+  let dirsOpt = dirs opts
+      directories = if L.null dirsOpt then ["."] else dirsOpt
+  reportSizes opts $ map (fromText . pack) directories
   stopGlobalPool
 
 reportSizes :: SizesOpts -> [FilePath] -> IO ()
@@ -146,9 +150,8 @@ humanReadable x
 reportEntry :: EntryInfo -> IO ()
 reportEntry entry =
   let path = unpack . toTextIgnore $ entry^.entryPath
-  in printf (unpack "%10s %10s %10d  %s%s\n")
+  in printf (unpack "%10s %10d  %s%s\n")
             (humanReadable (entry^.entryAllocSize))
-            (humanReadable (entry^.entryActualSize))
             (entry^.entryCount) path
             (unpack $ if entry^.entryIsDir && L.last path /= '/'
                       then "/" else "")
@@ -198,20 +201,32 @@ gatherSizes opts curDepth path = do
                      else [] )
 
       |   (  isRegularFile status
-           && not (annexAware opts && path' =~ annexRe))
-        || (annexAware opts && isSymbolicLink status) =
+           && not (annex opts && path' =~ annexRe))
+        || (annex opts && isSymbolicLink status) =
         catch (getFileSize status)
-              (\(e :: IOException) -> returnEmpty)
+              (\e -> do print (e :: IOException)
+                        returnEmpty)
 
       | otherwise = returnEmpty
 
+    -- If status is for a symbolic link, it must be a Git-annex'd file
     getFileSize status = do
       status' <-
         if isSymbolicLink status
         then do
           destPath <- readSymbolicLink path'
           if destPath =~ annexRe
-            then getFileStatus destPath
+            then do
+            let destFilePath  = fromText (T.pack destPath)
+                destPath'     = if relative destFilePath
+                                then (T.unpack . toTextIgnore $
+                                      parent path </> destFilePath)
+                                else destPath
+                destFilePath' = fromText (T.pack destPath')
+            exists <- isFile destFilePath'
+            if exists
+              then getFileStatus destPath'
+              else return status
             else return status
         else return status
 
@@ -221,7 +236,9 @@ gatherSizes opts curDepth path = do
 
       return (  entryCount      .~ 1
               $ entryActualSize .~ fsize
-              $ entryAllocSize  .~ blksize * blockSize opts
+              $ entryAllocSize  .~ (if apparent opts
+                                    then fsize
+                                    else blksize * blockSize opts)
               $ newEntry path False, [])
 
     returnEmpty = return (newEntry path False, [])
