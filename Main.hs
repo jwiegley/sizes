@@ -17,7 +17,7 @@ import           Data.Text as T hiding (filter, map, chunksOf)
 import           Filesystem (listDirectory, isFile)
 import           Filesystem.Path.CurrentOS
 import           GHC.Conc
-import           Prelude hiding (FilePath, sequence)
+import           Prelude hiding (FilePath, sequence, catch)
 import           Stat
 import           System.Console.CmdArgs
 import           System.Environment (getArgs, withArgs)
