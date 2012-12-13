@@ -30,7 +30,7 @@ import Debug.Trace
 default (Integer, Text)
 
 version :: String
-version = "2.0.1"
+version = "2.0.3"
 
 copyright :: String
 copyright = "2012"
