@@ -22,8 +22,7 @@ Executable sizes
     Include-dirs:  .
     Includes:      HsStat.h
     c-sources:	   HsStat.c
-    ghc-options:   -threaded
--- -with-rtsopts=-K16M
+    ghc-options:   -threaded -with-rtsopts=-K16M
 
     Build-depends: base            >= 4 && < 5
                  , bytestring
