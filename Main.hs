@@ -194,10 +194,9 @@ gatherSizes opts curDepth path =
 
       | isDirectory status =
         foldM (\(y, ys) x -> do
-                  entry <- gatherSizesW opts (curDepth + 1) (collapse x)
-                  let x' = fst entry
+                  (x',xs') <- gatherSizesW opts (curDepth + 1) (collapse x)
                   return (y <> x', if curDepth < depth opts
-                                   then ys <> DL.singleton x' <> snd entry
+                                   then ys <> DL.singleton x' <> xs'
                                    else DL.empty))
               (newEntry path True, DL.empty) =<< listDirectory path
 
