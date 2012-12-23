@@ -193,12 +193,13 @@ gatherSizes opts curDepth path =
       | not (L.null (exclude opts)) && path' =~ exclude opts = returnEmpty path
 
       | isDirectory status =
-        foldM (\(y, ys) x -> do
-                  (x',xs') <- gatherSizesW opts (curDepth + 1) (collapse x)
-                  return (y <> x', if curDepth < depth opts
-                                   then ys <> DL.singleton x' <> xs'
-                                   else DL.empty))
-              (newEntry path True, DL.empty) =<< listDirectory path
+            listDirectory path
+        >>= mapAndUnzipM (gatherSizesW opts (curDepth + 1) . collapse)
+        >>= \(xs, ys) ->
+              let x = mconcat (newEntry path True : xs)
+              in return (x, if curDepth < depth opts
+                            then DL.append (DL.fromList xs) (mconcat ys)
+                            else DL.empty)
 
       | (isRegularFile status && not (annex opts && path' =~ annexRe))
         || (annex opts && isSymbolicLink status) =
