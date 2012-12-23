@@ -22,7 +22,7 @@ Executable sizes
     Include-dirs:  .
     Includes:      HsStat.h
     c-sources:	   HsStat.c
-    Ghc-options:   -threaded
+    ghc-options:   -threaded -with-rtsopts=-K16M
 
     Build-depends: base            >= 4 && < 5
                  , bytestring
@@ -33,6 +33,7 @@ Executable sizes
                  , regex-posix     >= 0.95
                  , system-fileio   >= 0.3.9
                  , system-filepath >= 0.4.7
+                 , dlist           >= 0.5
                  , text
                  , unix
 

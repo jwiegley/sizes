@@ -10,6 +10,8 @@ import           Control.DeepSeq
 import           Control.Exception
 import           Control.Lens
 import           Control.Monad
+import           Data.DList (DList)
+import qualified Data.DList as DL
 import           Data.Function
 import qualified Data.List as L
 import           Data.Monoid
@@ -128,7 +130,8 @@ reportEntryP opts entry = smalls opts
 reportSizes :: SizesOpts -> [FilePath] -> IO ()
 reportSizes opts xs = do
   entryInfos <- parallel $ map reportSizesForDir xs
-  let infos  = map fst entryInfos ++ L.concatMap snd entryInfos
+  let infos  = map fst entryInfos ++
+               DL.toList (DL.concat (map snd entryInfos))
       sorted = L.sortBy ((compare `on`) $
                          if byCount opts
                          then (^. entryCount)
@@ -136,13 +139,13 @@ reportSizes opts xs = do
   mapM_ reportEntry (filter (reportEntryP opts) sorted)
 
   where
-    reportSizesForDir dir = do
+    reportSizesForDir =
       -- fsStatus <- getFilesystemStatus (E.encodeUtf8 (toTextIgnore dir))
       let fsBlkSize = statBlockSize -- filesystemBlockSize fsStatus
           opts'     = if blockSize opts == 0
                       then opts { blockSize = fromIntegral fsBlkSize }
                       else opts
-      gatherSizesW opts' 0 dir
+      in gatherSizesW opts' 0
 
 humanReadable :: Int -> String
 humanReadable x
@@ -167,15 +170,16 @@ reportEntry entry =
 toTextIgnore :: FilePath -> Text
 toTextIgnore = either id id . toText
 
-returnEmpty :: FilePath -> IO (EntryInfo, [EntryInfo])
-returnEmpty path = return (newEntry path False, [])
+returnEmpty :: FilePath -> IO (EntryInfo, DList EntryInfo)
+returnEmpty path = return (newEntry path False, DL.empty)
 
-gatherSizesW :: SizesOpts -> Int -> FilePath -> IO (EntryInfo, [EntryInfo])
+gatherSizesW :: SizesOpts -> Int -> FilePath -> IO (EntryInfo, DList EntryInfo)
 gatherSizesW opts d p =
   catch (gatherSizes opts d p)
         (\e -> print (e :: IOException) >> returnEmpty p)
+{-# INLINE gatherSizesW #-}
 
-gatherSizes :: SizesOpts -> Int -> FilePath -> IO (EntryInfo, [EntryInfo])
+gatherSizes :: SizesOpts -> Int -> FilePath -> IO (EntryInfo, DList EntryInfo)
 gatherSizes opts curDepth path =
   gatherSizes' =<< if curDepth == 0
                    then getFileStatus path'
@@ -188,17 +192,14 @@ gatherSizes opts curDepth path =
     gatherSizes' status
       | not (L.null (exclude opts)) && path' =~ exclude opts = returnEmpty path
 
-      | isDirectory status = do
-        files   <- listDirectory path
-        entries <- (if curDepth == 0 then parallel else sequence) $
-                   map (gatherSizesW opts (curDepth + 1) . collapse) files
-        let firsts = map fst entries
-
-        return ( L.foldl' mappend (newEntry path True) firsts
-               , filter (reportEntryP opts) $
-                 if curDepth <= depth opts
-                 then firsts ++ L.concatMap snd entries
-                 else [] )
+      | isDirectory status =
+        foldM (\(y, ys) x -> do
+                  entry <- gatherSizesW opts (curDepth + 1) (collapse x)
+                  let x' = fst entry
+                  return (y <> x', if curDepth < depth opts
+                                   then ys <> DL.singleton x' <> snd entry
+                                   else DL.empty))
+              (newEntry path True, DL.empty) =<< listDirectory path
 
       | (isRegularFile status && not (annex opts && path' =~ annexRe))
         || (annex opts && isSymbolicLink status) =
@@ -228,15 +229,15 @@ gatherSizes opts curDepth path =
             else return status
         else return status
 
-      let fsize     = fromIntegral $ fileSize status'
-          blksize   = fromIntegral $ fileBlockSize (unsafeCoerce status')
+      let fsize     = fileSize status'
+          blksize   = fileBlockSize (unsafeCoerce status')
           allocSize = if apparent opts
-                      then fsize
-                      else blksize * blockSize opts
+                      then fromIntegral fsize
+                      else fromIntegral blksize * blockSize opts
 
       return (EntryInfo { _entryPath       = path
                         , _entryCount      = 1
                         , _entryAllocSize  = allocSize
-                        , _entryIsDir      = False }, [])
+                        , _entryIsDir      = False }, DL.empty)
 
 -- Main.hs (sizes) ends here
