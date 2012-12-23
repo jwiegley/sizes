@@ -9,11 +9,12 @@ import           Control.DeepSeq
 import           Control.Exception
 import           Control.Lens
 import           Control.Monad hiding (sequence)
-import qualified Data.Text.Encoding as E
 import           Data.Function
 import qualified Data.List as L
 import           Data.Monoid
 import           Data.Text as T hiding (filter, map, chunksOf)
+import qualified Data.Text.Encoding as E
+import           Debug.Trace
 import           Filesystem (listDirectory, isFile)
 import           Filesystem.Path.CurrentOS
 import           GHC.Conc
@@ -25,7 +26,6 @@ import           System.Posix.Files
 import           Text.Printf
 import           Text.Regex.Posix
 import           Unsafe.Coerce
-import Debug.Trace
 
 default (Integer, Text)
 
@@ -114,7 +114,7 @@ runSizes opts = do
 reportSizes :: SizesOpts -> [FilePath] -> IO ()
 reportSizes opts xs = do
   entryInfos <- parallel $ map reportSizesForDir xs
-  let infos  = map fst entryInfos ++ mconcat (map snd entryInfos)
+  let infos  = map fst entryInfos ++ L.concatMap snd entryInfos
       sorted = L.sortBy ((compare `on`) $ if byCount opts
                                           then (^. entryCount)
                                           else (^. entryAllocSize)) infos
@@ -134,7 +134,7 @@ reportSizes opts xs = do
       gatherSizesW opts' 0 dir
 
     minSize'  = (if minSize opts == 0 then 10 else minSize opts) * 1024^2
-    minCount' = (if minCount opts == 0 then 100 else minCount opts)
+    minCount' = if minCount opts == 0 then 100 else minCount opts
 
 humanReadable :: Integer -> String
 humanReadable x
@@ -157,14 +157,13 @@ reportEntry entry =
                       then "/" else "")
 
 toTextIgnore :: FilePath -> Text
-toTextIgnore p = case toText p of Left _ -> ""; Right x -> x
+toTextIgnore = either id id . toText
 
 gatherSizesW :: SizesOpts -> Int -> FilePath -> IO (EntryInfo, [EntryInfo])
 gatherSizesW opts d p =
   catch (gatherSizes opts d p)
-        (\e -> do
-            print (e :: IOException)
-            return (newEntry p False, []))
+        (\e -> do print (e :: IOException)
+                  return (newEntry p False, []))
 
 gatherSizes :: SizesOpts -> Int -> FilePath -> IO (EntryInfo, [EntryInfo])
 gatherSizes opts curDepth path = do
@@ -179,7 +178,7 @@ gatherSizes opts curDepth path = do
     annexRe = unpack "\\.git/annex/"
 
     gatherSizes' status
-      | (exclude opts) /= "" && path' =~ exclude opts = returnEmpty
+      | exclude opts /= "" && path' =~ exclude opts = returnEmpty
 
       | isDirectory status = do
         files   <- listDirectory path
@@ -219,8 +218,8 @@ gatherSizes opts curDepth path = do
             then do
             let destFilePath  = fromText (T.pack destPath)
                 destPath'     = if relative destFilePath
-                                then (T.unpack . toTextIgnore $
-                                      parent path </> destFilePath)
+                                then T.unpack . toTextIgnore $
+                                     parent path </> destFilePath
                                 else destPath
                 destFilePath' = fromText (T.pack destPath')
             exists <- isFile destFilePath'
