@@ -4,11 +4,12 @@
 
 module Main where
 
+import           Control.Applicative
 import           Control.Concurrent.ParallelIO
 import           Control.DeepSeq
 import           Control.Exception
 import           Control.Lens
-import           Control.Monad hiding (sequence)
+import           Control.Monad
 import           Data.Function
 import qualified Data.List as L
 import           Data.Monoid
@@ -30,7 +31,7 @@ import           Unsafe.Coerce
 default (Integer, Text)
 
 version :: String
-version = "2.0.3"
+version = "2.0.4"
 
 copyright :: String
 copyright = "2012"
@@ -43,9 +44,9 @@ data SizesOpts = SizesOpts { jobs         :: Int
                            , annex        :: Bool
                            , apparent     :: Bool
                            , exclude      :: String
-                           , minSize      :: Integer
-                           , minCount     :: Integer
-                           , blockSize    :: Integer
+                           , minSize      :: Int
+                           , minCount     :: Int
+                           , blockSize    :: Int
                            , smalls       :: Bool
                            -- , dirsOnly  :: Bool
                            , depth        :: Int
@@ -81,20 +82,25 @@ sizesOpts = SizesOpts
     program "sizes" &=
     help "Calculate amount of disk used by the given directories"
 
-data EntryInfo = EntryInfo { _entryPath       :: !FilePath
-                           , _entryCount      :: !Integer
-                           , _entryActualSize :: !Integer
-                           , _entryAllocSize  :: !Integer
-                           , _entryIsDir      :: !Bool }
+data EntryInfo = EntryInfo { _entryPath       :: FilePath
+                           , _entryCount      :: Int
+                           , _entryAllocSize  :: Int
+                           , _entryIsDir      :: Bool }
                deriving Show
 
 makeLenses ''EntryInfo
 
+newEntry :: FilePath -> Bool -> EntryInfo
+newEntry p = EntryInfo p 0 0
+
+instance Monoid EntryInfo where
+  mempty = newEntry "" False
+  x `mappend` y = seq x $ seq y $
+                  entryCount      +~ y^.entryCount $
+                  entryAllocSize  +~ y^.entryAllocSize $ x
+
 instance NFData EntryInfo where
   rnf a = a `seq` ()
-
-newEntry :: FilePath -> Bool -> EntryInfo
-newEntry p = EntryInfo p 0 0 0
 
 main :: IO ()
 main = do
@@ -111,32 +117,34 @@ runSizes opts = do
   reportSizes opts $ map (fromText . pack) directories
   stopGlobalPool
 
+reportEntryP :: SizesOpts -> EntryInfo -> Bool
+reportEntryP opts entry = smalls opts
+                          || entry^.entryAllocSize >= minSize'
+                          || entry^.entryCount >= minCount'
+  where
+    minSize'  = (if minSize opts == 0 then 10 else minSize opts) * 1024^2
+    minCount' = if minCount opts == 0 then 100 else minCount opts
+
 reportSizes :: SizesOpts -> [FilePath] -> IO ()
 reportSizes opts xs = do
   entryInfos <- parallel $ map reportSizesForDir xs
   let infos  = map fst entryInfos ++ L.concatMap snd entryInfos
-      sorted = L.sortBy ((compare `on`) $ if byCount opts
-                                          then (^. entryCount)
-                                          else (^. entryAllocSize)) infos
-  forM_ sorted $ \entry ->
-    when ( smalls opts
-         || entry^.entryAllocSize >= minSize'
-         || entry^.entryCount >= minCount')
-         $ reportEntry entry
+      sorted = L.sortBy ((compare `on`) $
+                         if byCount opts
+                         then (^. entryCount)
+                         else (^. entryAllocSize)) infos
+  mapM_ reportEntry (filter (reportEntryP opts) sorted)
 
   where
     reportSizesForDir dir = do
-      fsStatus <- getFilesystemStatus (E.encodeUtf8 (toTextIgnore dir))
+      -- fsStatus <- getFilesystemStatus (E.encodeUtf8 (toTextIgnore dir))
       let fsBlkSize = statBlockSize -- filesystemBlockSize fsStatus
           opts'     = if blockSize opts == 0
                       then opts { blockSize = fromIntegral fsBlkSize }
                       else opts
       gatherSizesW opts' 0 dir
 
-    minSize'  = (if minSize opts == 0 then 10 else minSize opts) * 1024^2
-    minCount' = if minCount opts == 0 then 100 else minCount opts
-
-humanReadable :: Integer -> String
+humanReadable :: Int -> String
 humanReadable x
   | x < 1024   = printf "%db" x
   | x < 1024^2 = printf "%.0fK" (fromIntegral x / (1024 :: Double))
@@ -149,7 +157,7 @@ humanReadable x
 
 reportEntry :: EntryInfo -> IO ()
 reportEntry entry =
-  let path = unpack . toTextIgnore $ entry^.entryPath
+  let path = unpack (toTextIgnore (entry^.entryPath))
   in printf (unpack "%10s %10d  %s%s\n")
             (humanReadable (entry^.entryAllocSize))
             (entry^.entryCount) path
@@ -159,54 +167,45 @@ reportEntry entry =
 toTextIgnore :: FilePath -> Text
 toTextIgnore = either id id . toText
 
+returnEmpty :: FilePath -> IO (EntryInfo, [EntryInfo])
+returnEmpty path = return (newEntry path False, [])
+
 gatherSizesW :: SizesOpts -> Int -> FilePath -> IO (EntryInfo, [EntryInfo])
 gatherSizesW opts d p =
   catch (gatherSizes opts d p)
-        (\e -> do print (e :: IOException)
-                  return (newEntry p False, []))
+        (\e -> print (e :: IOException) >> returnEmpty p)
 
 gatherSizes :: SizesOpts -> Int -> FilePath -> IO (EntryInfo, [EntryInfo])
-gatherSizes opts curDepth path = do
-  status <- if curDepth == 0
-            then getFileStatus path'
-            else getSymbolicLinkStatus path'
-  gatherSizes' status
-
+gatherSizes opts curDepth path =
+  gatherSizes' =<< if curDepth == 0
+                   then getFileStatus path'
+                   else getSymbolicLinkStatus path'
   where
-    path' = unpack $ toTextIgnore path
-
-    annexRe = unpack "\\.git/annex/"
+    path'    = unpack (toTextIgnore path)
+    annexRe  = unpack "\\.git/annex/"
+    minSize' = (if minSize opts == 0 then 10 else minSize opts) * 1024^2
 
     gatherSizes' status
-      | exclude opts /= "" && path' =~ exclude opts = returnEmpty
+      | not (L.null (exclude opts)) && path' =~ exclude opts = returnEmpty path
 
       | isDirectory status = do
         files   <- listDirectory path
-        entries <- let func = gatherSizesW opts (curDepth + 1) . collapse
-                   in if curDepth == 0
-                      then parallel $ map func files
-                      else mapM func files
-
+        entries <- (if curDepth == 0 then parallel else sequence) $
+                   map (gatherSizesW opts (curDepth + 1) . collapse) files
         let firsts = map fst entries
 
-        return $!! ( L.foldl' (\current entry ->
-                             entryCount      +~ entry^.entryCount $
-                             entryActualSize +~ entry^.entryActualSize $
-                             entryAllocSize  +~ entry^.entryAllocSize $ current)
-                           (newEntry path True)
-                           firsts
-                   , if curDepth <= depth opts
-                     then firsts ++ L.concatMap snd entries
-                     else [] )
+        return ( L.foldl' mappend (newEntry path True) firsts
+               , filter (reportEntryP opts) $
+                 if curDepth <= depth opts
+                 then firsts ++ L.concatMap snd entries
+                 else [] )
 
-      |   (  isRegularFile status
-           && not (annex opts && path' =~ annexRe))
+      | (isRegularFile status && not (annex opts && path' =~ annexRe))
         || (annex opts && isSymbolicLink status) =
         catch (getFileSize status)
-              (\e -> do print (e :: IOException)
-                        returnEmpty)
+              (\e -> print (e :: IOException) >> returnEmpty path)
 
-      | otherwise = returnEmpty
+      | otherwise = returnEmpty path
 
     -- If status is for a symbolic link, it must be a Git-annex'd file
     getFileSize status = do
@@ -216,30 +215,28 @@ gatherSizes opts curDepth path = do
           destPath <- readSymbolicLink path'
           if destPath =~ annexRe
             then do
-            let destFilePath  = fromText (T.pack destPath)
-                destPath'     = if relative destFilePath
-                                then T.unpack . toTextIgnore $
-                                     parent path </> destFilePath
-                                else destPath
-                destFilePath' = fromText (T.pack destPath')
-            exists <- isFile destFilePath'
-            if exists
-              then getFileStatus destPath'
-              else return status
+              let destFilePath  = fromText (T.pack destPath)
+                  destPath'     = if relative destFilePath
+                                  then T.unpack . toTextIgnore $
+                                       parent path </> destFilePath
+                                  else destPath
+                  destFilePath' = fromText (T.pack destPath')
+              exists <- isFile destFilePath'
+              if exists
+                then getFileStatus destPath'
+                else return status
             else return status
         else return status
 
-      let fsize   = fromIntegral $ fileSize status'
-          blksize = fromIntegral $
-                    fileBlockSize (unsafeCoerce status')
+      let fsize     = fromIntegral $ fileSize status'
+          blksize   = fromIntegral $ fileBlockSize (unsafeCoerce status')
+          allocSize = if apparent opts
+                      then fsize
+                      else blksize * blockSize opts
 
-      return (  entryCount      .~ 1
-              $ entryActualSize .~ fsize
-              $ entryAllocSize  .~ (if apparent opts
-                                    then fsize
-                                    else blksize * blockSize opts)
-              $ newEntry path False, [])
-
-    returnEmpty = return (newEntry path False, [])
+      return (EntryInfo { _entryPath       = path
+                        , _entryCount      = 1
+                        , _entryAllocSize  = allocSize
+                        , _entryIsDir      = False }, [])
 
 -- Main.hs (sizes) ends here
