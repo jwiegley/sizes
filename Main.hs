@@ -145,7 +145,7 @@ reportSizes opts xs = do
           opts'     = if blockSize opts == 0
                       then opts { blockSize = fromIntegral fsBlkSize }
                       else opts
-      in gatherSizesW opts' 0
+      in gatherSizes opts' 0
 
 humanReadable :: Int -> String
 humanReadable x
@@ -173,17 +173,12 @@ toTextIgnore = either id id . toText
 returnEmpty :: FilePath -> IO (EntryInfo, DList EntryInfo)
 returnEmpty path = return (newEntry path False, DL.empty)
 
-gatherSizesW :: SizesOpts -> Int -> FilePath -> IO (EntryInfo, DList EntryInfo)
-gatherSizesW opts d p =
-  catch (gatherSizes opts d p)
-        (\e -> print (e :: IOException) >> returnEmpty p)
-{-# INLINE gatherSizesW #-}
-
 gatherSizes :: SizesOpts -> Int -> FilePath -> IO (EntryInfo, DList EntryInfo)
 gatherSizes opts curDepth path =
-  gatherSizes' =<< if curDepth == 0
-                   then getFileStatus path'
-                   else getSymbolicLinkStatus path'
+  catch (gatherSizes' =<< if curDepth == 0
+                          then getFileStatus path'
+                          else getSymbolicLinkStatus path')
+        (\e -> print (e :: IOException) >> returnEmpty path)
   where
     path'    = unpack (toTextIgnore path)
     annexRe  = unpack "\\.git/annex/"
@@ -202,9 +197,7 @@ gatherSizes opts curDepth path =
                             else DL.empty)
 
       | (isRegularFile status && not (annex opts && path' =~ annexRe))
-        || (annex opts && isSymbolicLink status) =
-        catch (getFileSize status)
-              (\e -> print (e :: IOException) >> returnEmpty path)
+        || (annex opts && isSymbolicLink status) = getFileSize status
 
       | otherwise = returnEmpty path
 
