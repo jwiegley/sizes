@@ -175,21 +175,22 @@ returnEmpty path = return (newEntry path False, DL.empty)
 
 gatherSizes :: SizesOpts -> Int -> FilePath -> IO (EntryInfo, DList EntryInfo)
 gatherSizes opts curDepth path =
-  catch (gatherSizes' =<< if curDepth == 0
-                          then getFileStatus path'
-                          else getSymbolicLinkStatus path')
-        (\e -> print (e :: IOException) >> returnEmpty path)
+  catch (go =<< if curDepth == 0
+                then getFileStatus path'
+                else getSymbolicLinkStatus path')
+        (\e -> do putStrLn $ path' ++ ": " ++ show (e :: IOException)
+                  returnEmpty path)
   where
     path'    = unpack (toTextIgnore path)
     annexRe  = unpack "\\.git/annex/"
-    minSize' = (if minSize opts == 0 then 10 else minSize opts) * 1024^2
 
-    gatherSizes' status
+    go status
       | not (L.null (exclude opts)) && path' =~ exclude opts = returnEmpty path
 
       | isDirectory status =
             listDirectory path
-        >>= mapAndUnzipM (gatherSizesW opts (curDepth + 1) . collapse)
+        >>= (\files -> return (trace (show (length files) files)))
+        >>= mapAndUnzipM (gatherSizes opts (curDepth + 1) . collapse)
         >>= \(xs, ys) ->
               let x = mconcat (newEntry path True : xs)
               in return (x, if curDepth < depth opts
@@ -197,40 +198,38 @@ gatherSizes opts curDepth path =
                             else DL.empty)
 
       | (isRegularFile status && not (annex opts && path' =~ annexRe))
-        || (annex opts && isSymbolicLink status) = getFileSize status
+        || (annex opts && isSymbolicLink status) =do
+        status' <-
+          -- If status is for a symbolic link, it must be a Git-annex'd file
+          if isSymbolicLink status
+          then do
+            destPath <- readSymbolicLink path'
+            if destPath =~ annexRe
+              then do
+                let destFilePath  = fromText (T.pack destPath)
+                    destPath'     = if relative destFilePath
+                                    then T.unpack . toTextIgnore $
+                                         parent path </> destFilePath
+                                    else destPath
+                    destFilePath' = fromText (T.pack destPath')
+                exists <- isFile destFilePath'
+                if exists
+                  then getFileStatus destPath'
+                  else return status
+              else return status
+          else return status
+
+        let fsize     = fileSize status'
+            blksize   = fileBlockSize (unsafeCoerce status')
+            allocSize = if apparent opts
+                        then fromIntegral fsize
+                        else fromIntegral blksize * blockSize opts
+
+        return (EntryInfo { _entryPath       = path
+                          , _entryCount      = 1
+                          , _entryAllocSize  = allocSize
+                          , _entryIsDir      = False }, DL.empty)
 
       | otherwise = returnEmpty path
-
-    -- If status is for a symbolic link, it must be a Git-annex'd file
-    getFileSize status = do
-      status' <-
-        if isSymbolicLink status
-        then do
-          destPath <- readSymbolicLink path'
-          if destPath =~ annexRe
-            then do
-              let destFilePath  = fromText (T.pack destPath)
-                  destPath'     = if relative destFilePath
-                                  then T.unpack . toTextIgnore $
-                                       parent path </> destFilePath
-                                  else destPath
-                  destFilePath' = fromText (T.pack destPath')
-              exists <- isFile destFilePath'
-              if exists
-                then getFileStatus destPath'
-                else return status
-            else return status
-        else return status
-
-      let fsize     = fileSize status'
-          blksize   = fileBlockSize (unsafeCoerce status')
-          allocSize = if apparent opts
-                      then fromIntegral fsize
-                      else fromIntegral blksize * blockSize opts
-
-      return (EntryInfo { _entryPath       = path
-                        , _entryCount      = 1
-                        , _entryAllocSize  = allocSize
-                        , _entryIsDir      = False }, DL.empty)
 
 -- Main.hs (sizes) ends here
