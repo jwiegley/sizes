@@ -14,7 +14,7 @@ Category:           Development
 Build-type:         Simple
 Cabal-version:      >= 1.8
 
-Extra-Source-Files: README.md
+Extra-Source-Files: README.md Stat.hs Stat.hsc
 
 Executable sizes
     Main-is:       Main.hs
