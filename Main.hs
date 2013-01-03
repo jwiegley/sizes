@@ -33,7 +33,7 @@ import           Unsafe.Coerce
 default (Integer, Text)
 
 version :: String
-version = "2.0.4"
+version = "2.0.5"
 
 copyright :: String
 copyright = "2012"
@@ -77,8 +77,8 @@ sizesOpts = SizesOpts
                        &= help "Also show small (<1M && <100 files) entries"
     -- , dirsOnly = def &= typ "BOOL"
     --                  &= help "Show directories only"
-    , depth      = def &= typ "INT"
-                       &= help "Report entries to a depth of INT (default: 0)"
+    , depth      = def &= typ "INT" &= opt (1 :: Int)
+                       &= help "Report entries to a depth of INT (default: 1)"
     , dirs       = def &= args &= typ "DIRS..." } &=
     summary sizesSummary &=
     program "sizes" &=
@@ -108,7 +108,7 @@ main :: IO ()
 main = do
   mainArgs <- getArgs
   opts     <- withArgs (if L.null mainArgs then [] else mainArgs)
-                       (cmdArgs sizesOpts)
+                      (cmdArgs sizesOpts)
   _        <- GHC.Conc.setNumCapabilities $ case jobs opts of 0 -> 2; x -> x
   runSizes opts
 
@@ -188,17 +188,17 @@ gatherSizes opts curDepth path =
       | not (L.null (exclude opts)) && path' =~ exclude opts = returnEmpty path
 
       | isDirectory status =
-            listDirectory path
-        >>= (\files -> return (trace (show (length files) files)))
-        >>= mapAndUnzipM (gatherSizes opts (curDepth + 1) . collapse)
-        >>= \(xs, ys) ->
-              let x = mconcat (newEntry path True : xs)
-              in return (x, if curDepth < depth opts
-                            then DL.append (DL.fromList xs) (mconcat ys)
-                            else DL.empty)
+        foldM (\(y, ys) x -> do
+                  (x',xs') <- gatherSizes opts (curDepth + 1) (collapse x)
+                  let x''  = y <> x'
+                      xs'' = if curDepth < depth opts
+                             then ys <> DL.singleton x' <> xs'
+                             else DL.empty
+                  return $! x'' `seq` xs'' `seq` (x'', xs''))
+              (newEntry path True, DL.empty) =<< listDirectory path
 
       | (isRegularFile status && not (annex opts && path' =~ annexRe))
-        || (annex opts && isSymbolicLink status) =do
+        || (annex opts && isSymbolicLink status) = do
         status' <-
           -- If status is for a symbolic link, it must be a Git-annex'd file
           if isSymbolicLink status
