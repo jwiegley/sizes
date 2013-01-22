@@ -33,7 +33,7 @@ import           Unsafe.Coerce
 default (Integer, Text)
 
 version :: String
-version = "2.0.6"
+version = "2.0.7"
 
 copyright :: String
 copyright = "2012"
@@ -77,7 +77,7 @@ sizesOpts = SizesOpts
                        &= help "Also show small (<1M && <100 files) entries"
     -- , dirsOnly = def &= typ "BOOL"
     --                  &= help "Show directories only"
-    , depth      = def &= typ "INT" &= opt (1 :: Int)
+    , depth      = def &= typ "INT"
                        &= help "Report entries to a depth of INT (default: 1)"
     , dirs       = def &= args &= typ "DIRS..." } &=
     summary sizesSummary &=
@@ -110,7 +110,7 @@ main = do
   opts     <- withArgs (if L.null mainArgs then [] else mainArgs)
                       (cmdArgs sizesOpts)
   _        <- GHC.Conc.setNumCapabilities $ case jobs opts of 0 -> 2; x -> x
-  runSizes opts
+  runSizes $ case depth opts of 0 -> opts { depth = 1 }; _ -> opts
 
 runSizes :: SizesOpts -> IO ()
 runSizes opts = do
