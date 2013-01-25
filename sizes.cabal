@@ -1,6 +1,6 @@
 Name: sizes
 
-Version:  2.1.1
+Version:  2.1.2
 Synopsis: Recursively show space (size and i-nodes) used in subdirectories
 
 Description: Recursively show space (size and i-nodes) used in subdirectories
@@ -14,7 +14,7 @@ Category:           Development
 Build-type:         Simple
 Cabal-version:      >= 1.8
 
-Extra-Source-Files: README.md Stat.hs Stat.hsc HsStat.h HsStat.c
+Extra-Source-Files: README.md Stat.hsc HsStat.h HsStat.c
 
 Executable sizes
     Main-is:       Main.hs
