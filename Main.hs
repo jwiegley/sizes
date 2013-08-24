@@ -1,8 +1,11 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE DeriveDataTypeable #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TemplateHaskell #-}
 
 module Main where
+
+-- jww (2013-08-23): Still need to deal with hard-links.
 
 import           Control.Applicative
 import           Control.Concurrent.ParallelIO
@@ -174,19 +177,24 @@ returnEmpty :: FilePath -> IO (EntryInfo, DList EntryInfo)
 returnEmpty path = return (newEntry path False, DL.empty)
 
 gatherSizes :: SizesOpts -> Int -> FilePath -> IO (EntryInfo, DList EntryInfo)
-gatherSizes opts curDepth path =
-  catch (go =<< if curDepth == 0
-                then getFileStatus path'
-                else getSymbolicLinkStatus path')
-        (\e -> do putStrLn $ path' ++ ": " ++ show (e :: IOException)
-                  returnEmpty path)
+gatherSizes opts curDepth path = do
+  excl <- if L.null (exclude opts)
+          then return $ Right False
+          else try $ return $ path' =~ exclude opts -- jww (2013-08-15): poor
+  case excl of
+    Left (_ :: SomeException) -> returnEmpty path
+    Right True -> returnEmpty path
+    _ ->
+      catch (go =<< if curDepth == 0
+                    then getFileStatus path'
+                    else getSymbolicLinkStatus path')
+            (\e -> do putStrLn $ path' ++ ": " ++ show (e :: IOException)
+                      returnEmpty path)
   where
-    path'    = unpack (toTextIgnore path)
-    annexRe  = unpack "\\.git/annex/"
+    pathT = toTextIgnore path
+    path' = unpack pathT
 
     go status
-      | not (L.null (exclude opts)) && path' =~ exclude opts = returnEmpty path
-
       | isDirectory status =
         foldM (\(y, ys) x -> do
                   (x',xs') <- gatherSizes opts (curDepth + 1) (collapse x)
@@ -197,14 +205,15 @@ gatherSizes opts curDepth path =
                   return $! x'' `seq` xs'' `seq` (x'', xs''))
               (newEntry path True, DL.empty) =<< listDirectory path
 
-      | (isRegularFile status && not (annex opts && path' =~ annexRe))
+      | (isRegularFile status
+         && not (annex opts && ".git/annex/" `isInfixOf` pathT))
         || (annex opts && isSymbolicLink status) = do
         status' <-
           -- If status is for a symbolic link, it must be a Git-annex'd file
           if isSymbolicLink status
           then do
             destPath <- readSymbolicLink path'
-            if destPath =~ annexRe
+            if ".git/annex/" `L.isInfixOf` destPath
               then do
                 let destFilePath  = fromText (T.pack destPath)
                     destPath'     = if relative destFilePath
