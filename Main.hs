@@ -36,7 +36,7 @@ import           Unsafe.Coerce
 default (Integer, Text)
 
 version :: String
-version = "2.3.0"
+version = "2.3.1"
 
 copyright :: String
 copyright = "2014"
@@ -69,7 +69,7 @@ sizesOpts = SizesOpts
                        &= help "Be mindful of how git-annex stores files"
     , apparent   = def &= typ "BOOL"
                        &= help "Print apparent sizes, rather than disk usage"
-    , baseTen    = def &= name "B" &= typ "BOOL"
+    , baseTen    = def &= name "H" &= typ "BOOL"
                        &= help "Print amounts divided by 1000 rather than 1024"
     , exclude    = def &= name "x" &= typ "REGEX"
                        &= help "Sort output by count (default: by size)"
