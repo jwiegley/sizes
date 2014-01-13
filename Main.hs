@@ -36,10 +36,10 @@ import           Unsafe.Coerce
 default (Integer, Text)
 
 version :: String
-version = "2.1.2"
+version = "2.3.0"
 
 copyright :: String
-copyright = "2013"
+copyright = "2014"
 
 sizesSummary :: String
 sizesSummary = "sizes v" ++ version ++ ", (C) John Wiegley " ++ copyright
@@ -48,6 +48,7 @@ data SizesOpts = SizesOpts { jobs         :: Int
                            , byCount      :: Bool
                            , annex        :: Bool
                            , apparent     :: Bool
+                           , baseTen      :: Bool
                            , exclude      :: String
                            , minSize      :: Int
                            , minCount     :: Int
@@ -68,6 +69,8 @@ sizesOpts = SizesOpts
                        &= help "Be mindful of how git-annex stores files"
     , apparent   = def &= typ "BOOL"
                        &= help "Print apparent sizes, rather than disk usage"
+    , baseTen    = def &= name "B" &= typ "BOOL"
+                       &= help "Print amounts divided by 1000 rather than 1024"
     , exclude    = def &= name "x" &= typ "REGEX"
                        &= help "Sort output by count (default: by size)"
     , minSize    = def &= name "m" &= typ "INT"
@@ -127,7 +130,8 @@ reportEntryP opts entry = smalls opts
                           || entry^.entryAllocSize >= minSize'
                           || entry^.entryCount >= minCount'
   where
-    minSize'  = (if minSize opts == 0 then 10 else minSize opts) * 1024^2
+    minSize'  = (if minSize opts == 0 then 10 else minSize opts) *
+        (if baseTen opts then 1000 else 1024)^2
     minCount' = if minCount opts == 0 then 100 else minCount opts
 
 reportSizes :: SizesOpts -> [FilePath] -> IO ()
@@ -139,7 +143,7 @@ reportSizes opts xs = do
                          if byCount opts
                          then (^. entryCount)
                          else (^. entryAllocSize)) infos
-  mapM_ reportEntry (filter (reportEntryP opts) sorted)
+  mapM_ (reportEntry (baseTen opts)) (filter (reportEntryP opts) sorted)
 
   where
     reportSizesForDir =
@@ -150,25 +154,26 @@ reportSizes opts xs = do
                       else opts
       in gatherSizes opts' 0
 
-humanReadable :: Int -> String
-humanReadable x
-  | x < 1024   = printf "%db" x
-  | x < 1024^2 = printf "%.0fK" (fromIntegral x / (1024 :: Double))
-  | x < 1024^3 = printf "%.1fM" (fromIntegral x / (1024^2 :: Double))
-  | x < 1024^4 = printf "%.2fG" (fromIntegral x / (1024^3 :: Double))
-  | x < 1024^5 = printf "%.3fT" (fromIntegral x / (1024^4 :: Double))
-  | x < 1024^6 = printf "%.3fP" (fromIntegral x / (1024^5 :: Double))
-  | x < 1024^7 = printf "%.3fX" (fromIntegral x / (1024^6 :: Double))
+humanReadable :: Int -> Int -> String
+humanReadable x div
+  | x < div   = printf "%db" x
+  | x < div^2 = printf "%.0fK" (fromIntegral x / (fromIntegral div :: Double))
+  | x < div^3 = printf "%.1fM" (fromIntegral x / (fromIntegral div^2 :: Double))
+  | x < div^4 = printf "%.2fG" (fromIntegral x / (fromIntegral div^3 :: Double))
+  | x < div^5 = printf "%.3fT" (fromIntegral x / (fromIntegral div^4 :: Double))
+  | x < div^6 = printf "%.3fP" (fromIntegral x / (fromIntegral div^5 :: Double))
+  | x < div^7 = printf "%.3fX" (fromIntegral x / (fromIntegral div^6 :: Double))
   | otherwise  = printf "%db" x
 
-reportEntry :: EntryInfo -> IO ()
-reportEntry entry =
+reportEntry :: Bool -> EntryInfo -> IO ()
+reportEntry bTen entry =
   let path = unpack (toTextIgnore (entry^.entryPath))
-  in printf (unpack "%10s %10d  %s%s\n")
-            (humanReadable (entry^.entryAllocSize))
-            (entry^.entryCount) path
-            (unpack $ if entry^.entryIsDir && L.last path /= '/'
-                      then "/" else "")
+  in printf
+     (unpack "%10s %10d  %s%s\n")
+     (humanReadable (entry^.entryAllocSize) (if bTen then 1000 else 1024))
+     (entry^.entryCount) path
+     (unpack $ if entry^.entryIsDir && L.last path /= '/'
+               then "/" else "")
 
 toTextIgnore :: FilePath -> Text
 toTextIgnore = either id id . toText
