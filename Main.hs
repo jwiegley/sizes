@@ -36,7 +36,7 @@ import           Unsafe.Coerce
 default (Integer, Text)
 
 version :: String
-version = "2.3.1"
+version = "2.3.1.1"
 
 copyright :: String
 copyright = "2014"
