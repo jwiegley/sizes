@@ -1,21 +1,18 @@
-{ cabal, cmdargs, deepseq, dlist, lens, parallelIo, regexPosix
-, systemFileio, systemFilepath, text
+{ mkDerivation, base, bytestring, cmdargs, deepseq, dlist, lens
+, parallel-io, regex-posix, stdenv, system-fileio, system-filepath
+, text, unix
 }:
-
-cabal.mkDerivation (self: {
+mkDerivation {
   pname = "sizes";
-  version = "2.3.1";
+  version = "2.3.2";
   src = ./.;
   isLibrary = false;
   isExecutable = true;
   buildDepends = [
-    cmdargs deepseq dlist lens parallelIo regexPosix systemFileio
-    systemFilepath text
+    base bytestring cmdargs deepseq dlist lens parallel-io regex-posix
+    system-fileio system-filepath text unix
   ];
-  meta = {
-    homepage = "https://github.com/jwiegley/sizes";
-    description = "Recursively show space (size and i-nodes) used in subdirectories";
-    license = self.stdenv.lib.licenses.bsd3;
-    platforms = self.ghc.meta.platforms;
-  };
-})
+  homepage = "https://github.com/jwiegley/sizes";
+  description = "Recursively show space (size and i-nodes) used in subdirectories";
+  license = stdenv.lib.licenses.bsd3;
+}
