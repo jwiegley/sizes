@@ -101,11 +101,14 @@ makeLenses ''EntryInfo
 newEntry :: FilePath -> Bool -> EntryInfo
 newEntry p = EntryInfo p 0 0
 
+instance Semigroup EntryInfo where
+  x <> y = seq x $ seq y $
+           entryCount      +~ y^.entryCount $
+           entryAllocSize  +~ y^.entryAllocSize $ x
+
 instance Monoid EntryInfo where
   mempty = newEntry "" False
-  x `mappend` y = seq x $ seq y $
-                  entryCount      +~ y^.entryCount $
-                  entryAllocSize  +~ y^.entryAllocSize $ x
+  mappend = (<>)
 
 instance NFData EntryInfo where
   rnf a = a `seq` ()

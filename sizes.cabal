@@ -33,6 +33,7 @@ Executable sizes
                  , system-fileio   >= 0.3.9
                  , system-filepath >= 0.4.7
                  , dlist           >= 0.5
+                 , semigroups
                  , text
                  , unix
 
