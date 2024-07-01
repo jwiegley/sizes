@@ -12,7 +12,7 @@ Author:             John Wiegley
 Maintainer:         John Wiegley <johnw@newartisans.com>
 Category:           Development
 Build-type:         Simple
-Cabal-version:      >= 1.8
+Cabal-version:      >= 1.10
 
 Extra-Source-Files: README.md Stat.hsc HsStat.h HsStat.c
 
