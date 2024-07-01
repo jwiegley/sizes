@@ -30,7 +30,7 @@ import           System.Console.CmdArgs
 import           System.Environment (getArgs, withArgs)
 import           System.Posix.Files hiding (fileBlockSize)
 import           Text.Printf
-import           Text.Regex.Posix
+import           Text.Regex.PCRE
 import           Unsafe.Coerce
 
 default (Integer, Text)
@@ -72,7 +72,7 @@ sizesOpts = SizesOpts
     , baseTen    = def &= name "H" &= typ "BOOL"
                        &= help "Print amounts divided by 1000 rather than 1024"
     , exclude    = def &= name "x" &= typ "REGEX"
-                       &= help "Sort output by count (default: by size)"
+                       &= help "Exclude files whose path matches the REGEX"
     , minSize    = def &= name "m" &= typ "INT"
                        &= help "Smallest size to show, in MB (default: 10)"
     , minCount   = def &= name "M" &= typ "INT"
