@@ -36,10 +36,10 @@ import           Unsafe.Coerce
 default (Integer, Text)
 
 version :: String
-version = "2.3.2"
+version = "2.4.0"
 
 copyright :: String
-copyright = "2014"
+copyright = "2024"
 
 sizesSummary :: String
 sizesSummary = "sizes v" ++ version ++ ", (C) John Wiegley " ++ copyright
