@@ -28,7 +28,7 @@ import           Prelude hiding (FilePath, sequence, catch)
 import           Stat
 import           System.Console.CmdArgs
 import           System.Environment (getArgs, withArgs)
-import           System.Posix.Files
+import           System.Posix.Files hiding (fileBlockSize)
 import           Text.Printf
 import           Text.Regex.Posix
 import           Unsafe.Coerce
