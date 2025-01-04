@@ -196,7 +196,7 @@ gatherSizes opts curDepth path = do
       catch (go =<< if curDepth == 0
                     then getFileStatus path'
                     else getSymbolicLinkStatus path')
-            (\e -> do putStrLn $ path' ++ ": " ++ show (e :: IOException)
+            (\e -> do putStrLn $ path' ++ ": " ++ Prelude.show (e :: IOException)
                       returnEmpty path)
   where
     pathT = toTextIgnore path
