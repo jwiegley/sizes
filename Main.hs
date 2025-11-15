@@ -10,14 +10,17 @@ module Main where
 import           Control.Applicative
 import           Control.Concurrent.ParallelIO
 import           Control.DeepSeq
-import           Control.Exception
+import           Control.Exception hiding (catch)
+import           Control.Monad.Catch (MonadCatch, catch)
 import           Control.Lens
 import           Control.Monad
+import           Control.Monad.State.Strict
 import           Data.DList (DList)
 import qualified Data.DList as DL
 import           Data.Function
 import qualified Data.List as L
 import           Data.Monoid
+import qualified Data.Set as Set
 import           Data.Text as T hiding (filter, map, chunksOf)
 import qualified Data.Text.Encoding as E
 import           Debug.Trace
@@ -29,6 +32,7 @@ import           Stat
 import           System.Console.CmdArgs
 import           System.Environment (getArgs, withArgs)
 import           System.Posix.Files hiding (fileBlockSize)
+import           System.Posix.Types (DeviceID, FileID)
 import           Text.Printf
 import           Text.Regex.PCRE
 import           Unsafe.Coerce
@@ -36,7 +40,7 @@ import           Unsafe.Coerce
 default (Integer, Text)
 
 version :: String
-version = "2.4.1"
+version = "2.4.2"
 
 copyright :: String
 copyright = "2025"
@@ -54,6 +58,7 @@ data SizesOpts = SizesOpts { jobs         :: Int
                            , minCount     :: Int
                            , blockSize    :: Int
                            , smalls       :: Bool
+                           , dedupeLinks  :: Bool
                            -- , dirsOnly  :: Bool
                            , depth        :: Int
                            , dirs         :: [String] }
@@ -81,6 +86,8 @@ sizesOpts = SizesOpts
                        &= help "Size of blocks on disk (default: 512)"
     , smalls     = def &= name "s" &= typ "BOOL"
                        &= help "Also show small (<1M && <100 files) entries"
+    , dedupeLinks = def &= name "L" &= typ "BOOL"
+                       &= help "Deduplicate hard links (count each inode only once)"
     -- , dirsOnly = def &= typ "BOOL"
     --                  &= help "Show directories only"
     , depth      = def &= typ "INT"
@@ -97,6 +104,9 @@ data EntryInfo = EntryInfo { _entryPath       :: FilePath
                deriving Show
 
 makeLenses ''EntryInfo
+
+-- Track (DeviceID, FileID) pairs to detect hard links
+type SeenInodes = Set.Set (DeviceID, FileID)
 
 newEntry :: FilePath -> Bool -> EntryInfo
 newEntry p = EntryInfo p 0 0
@@ -149,13 +159,13 @@ reportSizes opts xs = do
   mapM_ (reportEntry (baseTen opts)) (filter (reportEntryP opts) sorted)
 
   where
-    reportSizesForDir =
+    reportSizesForDir dir =
       -- fsStatus <- getFilesystemStatus (E.encodeUtf8 (toTextIgnore dir))
       let fsBlkSize = statBlockSize -- filesystemBlockSize fsStatus
           opts'     = if blockSize opts == 0
                       then opts { blockSize = fromIntegral fsBlkSize }
                       else opts
-      in gatherSizes opts' 0
+      in fst <$> runStateT (gatherSizes opts' 0 dir) Set.empty
 
 humanReadable :: Int -> Int -> String
 humanReadable x div
@@ -181,23 +191,25 @@ reportEntry bTen entry =
 toTextIgnore :: FilePath -> Text
 toTextIgnore = either id id . toText
 
-returnEmpty :: FilePath -> IO (EntryInfo, DList EntryInfo)
+returnEmpty :: FilePath -> StateT SeenInodes IO (EntryInfo, DList EntryInfo)
 returnEmpty path = return (newEntry path False, DL.empty)
 
-gatherSizes :: SizesOpts -> Int -> FilePath -> IO (EntryInfo, DList EntryInfo)
+gatherSizes :: SizesOpts -> Int -> FilePath -> StateT SeenInodes IO (EntryInfo, DList EntryInfo)
 gatherSizes opts curDepth path = do
   excl <- if L.null (exclude opts)
           then return $ Right False
-          else try $ return $ path' =~ exclude opts -- jww (2013-08-15): poor
+          else liftIO $ try $ return $ path' =~ exclude opts -- jww (2013-08-15): poor
   case excl of
     Left (_ :: SomeException) -> returnEmpty path
     Right True -> returnEmpty path
     _ ->
-      catch (go =<< if curDepth == 0
-                    then getFileStatus path'
-                    else getSymbolicLinkStatus path')
-            (\e -> do putStrLn $ path' ++ ": " ++ Prelude.show (e :: IOException)
-                      returnEmpty path)
+      (do status <- liftIO (if curDepth == 0
+                            then getFileStatus path'
+                            else getSymbolicLinkStatus path')
+          go status)
+      `catch`
+      (\e -> do liftIO $ putStrLn $ path' ++ ": " ++ Prelude.show (e :: IOException)
+                returnEmpty path)
   where
     pathT = toTextIgnore path
     path' = unpack pathT
@@ -211,7 +223,7 @@ gatherSizes opts curDepth path = do
                              then ys <> DL.singleton x' <> xs'
                              else DL.empty
                   return $! x'' `seq` xs'' `seq` (x'', xs''))
-              (newEntry path True, DL.empty) =<< listDirectory path
+              (newEntry path True, DL.empty) =<< liftIO (listDirectory path)
 
       | (isRegularFile status
          && not (annex opts && ".git/annex/" `isInfixOf` pathT))
@@ -220,7 +232,7 @@ gatherSizes opts curDepth path = do
           -- If status is for a symbolic link, it must be a Git-annex'd file
           if isSymbolicLink status
           then do
-            destPath <- readSymbolicLink path'
+            destPath <- liftIO $ readSymbolicLink path'
             if ".git/annex/" `L.isInfixOf` destPath
               then do
                 let destFilePath  = fromText (T.pack destPath)
@@ -229,21 +241,40 @@ gatherSizes opts curDepth path = do
                                          parent path </> destFilePath
                                     else destPath
                     destFilePath' = fromText (T.pack destPath')
-                exists <- isFile destFilePath'
+                exists <- liftIO $ isFile destFilePath'
                 if exists
-                  then getFileStatus destPath'
+                  then liftIO $ getFileStatus destPath'
                   else return status
               else return status
           else return status
 
+        -- Check for hard link deduplication
+        let dev = deviceID status'
+            ino = fileID status'
+            numLinks = linkCount status'
+            shouldDedupe = dedupeLinks opts && numLinks > 1
+
+        -- If deduplication is enabled and this has multiple hard links, check if we've seen it
+        alreadySeen <- if shouldDedupe
+                       then do
+                         seen <- get
+                         if Set.member (dev, ino) seen
+                           then return True
+                           else do
+                             put $ Set.insert (dev, ino) seen
+                             return False
+                       else return False
+
         let fsize     = fileSize status'
             blksize   = fileBlockSize (unsafeCoerce status')
-            allocSize = if apparent opts
-                        then fromIntegral fsize
-                        else fromIntegral blksize * blockSize opts
+            allocSize = if alreadySeen
+                        then 0  -- Don't count size if we've already seen this inode
+                        else if apparent opts
+                             then fromIntegral fsize
+                             else fromIntegral blksize * blockSize opts
 
         return (EntryInfo { _entryPath       = path
-                          , _entryCount      = 1
+                          , _entryCount      = if alreadySeen then 0 else 1
                           , _entryAllocSize  = allocSize
                           , _entryIsDir      = False }, DL.empty)
 
