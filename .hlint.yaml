@@ -1,0 +1,10 @@
+# HLint configuration for sizes project
+
+# The $$(discover) in test/Spec.hs uses typed Template Haskell splice
+# syntax, not redundant brackets.
+- ignore: {name: "Redundant bracket", within: "Main.main"}
+
+# These tests intentionally verify the monoid right-identity law
+# (e <> mempty === e), so the "simplification" would defeat the test.
+- ignore: {name: "Monoid law, right identity", within: "Main.prop_monoid_right_identity_count"}
+- ignore: {name: "Monoid law, right identity", within: "Main.prop_monoid_right_identity_size"}

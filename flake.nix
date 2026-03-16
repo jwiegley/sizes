@@ -27,22 +27,47 @@
                   tools = {
                     cabal = {};
                     haskell-language-server = {};
-                    # hlint = {};
                     ghcid = {};
                   };
                   buildInputs = with pkgs; [
                     pkg-config
+                    haskellPackages.fourmolu
+                    haskellPackages.hlint
+                    lefthook
                   ];
                   withHoogle = true;
                 };
-                # modules = [{
-                #   enableLibraryProfiling = true;
-                #   enableProfiling = true;
-                # }];
               };
           })
         ];
+
+        src = pkgs.lib.cleanSource ./.;
+
+        hsFiles = builtins.concatStringsSep " " [
+          "${src}/Sizes.hs"
+          "${src}/app/Main.hs"
+          "${src}/test/Spec.hs"
+        ];
+
       in flake // {
         packages.default = flake.packages."sizes:exe:sizes";
+
+        checks = (flake.checks or {}) // {
+          build = flake.packages."sizes:exe:sizes";
+
+          format = pkgs.runCommand "format-check" {
+            nativeBuildInputs = [ pkgs.haskellPackages.fourmolu ];
+          } ''
+            fourmolu --mode check ${hsFiles}
+            touch $out
+          '';
+
+          lint = pkgs.runCommand "lint-check" {
+            nativeBuildInputs = [ pkgs.haskellPackages.hlint ];
+          } ''
+            hlint --hint=${src}/.hlint.yaml ${hsFiles}
+            touch $out
+          '';
+        };
       });
 }

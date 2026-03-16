@@ -2,7 +2,6 @@
 
 module Stat where
 
-import Foreign.C.String
 import Foreign.C.Types
 import Foreign.ForeignPtr
 import Foreign.Ptr
@@ -11,7 +10,6 @@ import System.IO.Unsafe
 import System.Posix.ByteString.FilePath
 import System.Posix.Internals ( CFilePath )
 import System.Posix.Types
-import Unsafe.Coerce
 
 #include "HsStat.h"
 
