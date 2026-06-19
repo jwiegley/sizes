@@ -6,8 +6,9 @@ import Control.Monad (unless)
 import Hedgehog
 import qualified Hedgehog.Gen as Gen
 import qualified Hedgehog.Range as Range
-import Sizes (EntryInfo (..), humanReadable)
+import Sizes (EntryInfo (..), crossesFileSystemBoundary, humanReadable)
 import System.Exit (exitFailure)
+import System.Posix.Types (DeviceID)
 
 main :: IO ()
 main = do
@@ -86,3 +87,34 @@ prop_humanReadable_nonempty = property $ do
     x <- forAll $ Gen.int (Range.linear 0 (1024 * 1024 * 1024 * 1024))
     d <- forAll $ Gen.element [1000, 1024]
     assert $ not (null (humanReadable x d))
+
+-- | Generate an arbitrary device ID.
+genDevice :: Gen DeviceID
+genDevice = fromIntegral <$> Gen.int (Range.linear 0 100000)
+
+-- crossesFileSystemBoundary: with the option disabled, nothing is ever a crossing
+prop_oneFS_disabled_never_crosses :: Property
+prop_oneFS_disabled_never_crosses = property $ do
+    root <- forAll $ Gen.maybe genDevice
+    dev <- forAll genDevice
+    crossesFileSystemBoundary False root dev === False
+
+-- crossesFileSystemBoundary: the traversal root only establishes the boundary
+prop_oneFS_root_establishes_boundary :: Property
+prop_oneFS_root_establishes_boundary = property $ do
+    dev <- forAll genDevice
+    crossesFileSystemBoundary True Nothing dev === False
+
+-- crossesFileSystemBoundary: same device as the root is not a crossing
+prop_oneFS_same_device_stays :: Property
+prop_oneFS_same_device_stays = property $ do
+    dev <- forAll genDevice
+    crossesFileSystemBoundary True (Just dev) dev === False
+
+-- crossesFileSystemBoundary: a different device than the root is a crossing
+prop_oneFS_different_device_crosses :: Property
+prop_oneFS_different_device_crosses = property $ do
+    root <- forAll genDevice
+    delta <- forAll $ Gen.int (Range.linear 1 100000)
+    let dev = root + fromIntegral delta
+    crossesFileSystemBoundary True (Just root) dev === True

@@ -22,6 +22,7 @@ module Sizes (
     humanReadable,
     reportEntryP,
     newEntry,
+    crossesFileSystemBoundary,
 ) where
 
 -- jww (2013-08-23): Still need to deal with hard-links.
@@ -75,6 +76,7 @@ data SizesOpts = SizesOpts
     , blockSize :: Int
     , smalls :: Bool
     , dedupeLinks :: Bool
+    , oneFileSystem :: Bool
     , -- , dirsOnly  :: Bool
       depth :: Int
     , dirs :: [String]
@@ -138,6 +140,13 @@ sizesOpts =
                 &= name "L"
                 &= typ "BOOL"
                 &= help "Deduplicate hard links (count each inode only once)"
+        , oneFileSystem =
+            def
+                &= explicit
+                &= name "one-file-system"
+                &= name "X"
+                &= typ "BOOL"
+                &= help "Do not descend into directories on other filesystems"
         , -- , dirsOnly = def &= typ "BOOL"
           --                  &= help "Show directories only"
           depth =
@@ -233,7 +242,7 @@ reportSizes opts xs = do
                 if blockSize opts == 0
                     then opts{blockSize = fromIntegral fsBlkSize}
                     else opts
-         in fst <$> runStateT (gatherSizes opts' 0 dir) Set.empty
+         in fst <$> runStateT (gatherSizes opts' Nothing 0 dir) Set.empty
 
 humanReadable :: Int -> Int -> String
 humanReadable x d
@@ -266,8 +275,18 @@ toTextIgnore = either id id . toText
 returnEmpty :: FilePath -> StateT SeenInodes IO (EntryInfo, DList EntryInfo)
 returnEmpty path = return (newEntry path False, DL.empty)
 
-gatherSizes :: SizesOpts -> Int -> FilePath -> StateT SeenInodes IO (EntryInfo, DList EntryInfo)
-gatherSizes opts curDepth path = do
+{- | Decide whether an entry should be skipped because it lies on a different
+filesystem than the traversal root.  The second argument is the device of
+the traversal root, or 'Nothing' at the top-level argument itself (where the
+boundary is merely established, so nothing is skipped).
+-}
+crossesFileSystemBoundary :: Bool -> Maybe DeviceID -> DeviceID -> Bool
+crossesFileSystemBoundary False _ _ = False
+crossesFileSystemBoundary True Nothing _ = False
+crossesFileSystemBoundary True (Just rootDev) dev = dev /= rootDev
+
+gatherSizes :: SizesOpts -> Maybe DeviceID -> Int -> FilePath -> StateT SeenInodes IO (EntryInfo, DList EntryInfo)
+gatherSizes opts mRootDev curDepth path = do
     excl <-
         if L.null (exclude opts)
             then return $ Right False
@@ -283,7 +302,9 @@ gatherSizes opts curDepth path = do
                             then getFileStatus path'
                             else getSymbolicLinkStatus path'
                         )
-                go status
+                if crossesFileSystemBoundary (oneFileSystem opts) mRootDev (deviceID status)
+                    then returnEmpty path
+                    else go status
             )
                 `catch` ( \e -> do
                             liftIO $ putStrLn $ path' ++ ": " ++ Prelude.show (e :: IOException)
@@ -297,7 +318,7 @@ gatherSizes opts curDepth path = do
         | isDirectory status =
             foldM
                 ( \(y, ys) x -> do
-                    (x', xs') <- gatherSizes opts (curDepth + 1) (collapse x)
+                    (x', xs') <- gatherSizes opts (Just (deviceID status)) (curDepth + 1) (collapse x)
                     let x'' = y <> x'
                         xs'' =
                             if curDepth < depth opts
