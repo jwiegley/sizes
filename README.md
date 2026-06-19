@@ -36,6 +36,9 @@ sizes -j4 /path/to/dir
 # Exclude paths matching a regex
 sizes -x '\.cache' /path/to/dir
 
+# Stay on one filesystem (skip mounted volumes, NFS/SMB shares, etc.)
+sizes -X /path/to/dir
+
 # Handle git-annex repos correctly
 sizes -A /path/to/annex-repo
 
@@ -73,6 +76,7 @@ sizes -s /path/to/dir
 | `-B INT` | Block size in bytes (default: 512) |
 | `-s` | Show small entries |
 | `-L` | Deduplicate hard links |
+| `-X`, `--one-file-system` | Don't descend into other filesystems |
 | `--depth INT` | Reporting depth (default: 1) |
 
 ## Development

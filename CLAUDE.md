@@ -48,6 +48,8 @@ cabal install --installdir=$HOME/.local/bin
 - `-M INT`: Minimum file count to show (default: 100)
 - `-B INT`: Block size in bytes (default: 512)
 - `-s`: Show small entries (<1M and <100 files)
+- `-L`: Deduplicate hard links (count each inode only once)
+- `-X`, `--one-file-system`: Do not descend into directories on other filesystems
 - `--depth INT`: Depth to report (default: 1)
 
 ## Architecture
