@@ -7,7 +7,7 @@ This file contains instructions for Claude Code when working with the sizes code
 `sizes` is a disk usage analyzer written in Haskell that recursively computes space and inode consumption of files and directories. Think `du` with more flexibility.
 
 **Author**: John Wiegley
-**Version**: 2.4.2
+**Version**: 2.4.3
 **GHC Version**: 9.10.2
 
 ## Build Commands

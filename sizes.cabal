@@ -1,6 +1,6 @@
 cabal-version:   2.4
 name:            sizes
-version:         2.4.2
+version:         2.4.3
 synopsis:        Recursively show space (size and i-nodes) used in subdirectories
 description:
   A command-line utility that recursively analyzes directory trees to display

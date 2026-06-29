@@ -56,10 +56,10 @@ import Prelude hiding (FilePath, sequence)
 default (Integer, Text)
 
 version :: String
-version = "2.4.2"
+version = "2.4.3"
 
 copyright :: String
-copyright = "2025"
+copyright = "2012-2026"
 
 sizesSummary :: String
 sizesSummary = "sizes v" ++ version ++ ", (C) John Wiegley " ++ copyright
