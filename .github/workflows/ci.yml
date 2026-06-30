@@ -12,7 +12,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # The haskell.nix binary cache supplies the prebuilt GHC and dependency
+      # closure. Without it, CI compiles GHC from source, which is slow and
+      # exhausts the runner's disk ("No space left on device").
       - uses: DeterminateSystems/nix-installer-action@main
+        with:
+          extra-conf: |
+            extra-substituters = https://cache.iog.io
+            extra-trusted-public-keys = hydra.iohk.io:f/Ea+s+dFdN+3Y/G+FDgSq+a5NEWhJGzdjvKNGv0/EQ=
 
       - uses: DeterminateSystems/magic-nix-cache-action@main
 
