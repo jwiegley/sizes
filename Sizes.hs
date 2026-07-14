@@ -1,3 +1,4 @@
+{-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE DeriveDataTypeable #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE ScopedTypeVariables #-}
@@ -10,6 +11,7 @@ module Sizes (
     -- * Types
     SizesOpts (..),
     EntryInfo (..),
+    ReportEntries,
     SeenInodes,
 
     -- * Lenses
@@ -22,10 +24,11 @@ module Sizes (
     humanReadable,
     reportEntryP,
     newEntry,
+    emptyReportEntries,
+    reportEntriesToList,
+    combineEntryResults,
     crossesFileSystemBoundary,
 ) where
-
--- jww (2013-08-23): Still need to deal with hard-links.
 
 import Control.Concurrent.ParallelIO
 import Control.DeepSeq
@@ -34,10 +37,11 @@ import Control.Lens
 import Control.Monad
 import Control.Monad.Catch (catch)
 import Control.Monad.State.Strict
-import Data.DList (DList)
-import qualified Data.DList as DL
+import qualified Data.Foldable as Foldable
 import Data.Function
 import qualified Data.List as L
+import Data.Sequence (Seq)
+import qualified Data.Sequence as Seq
 import qualified Data.Set as Set
 import Data.Text as T hiding (chunksOf, filter, map)
 import Filesystem (isFile, listDirectory)
@@ -161,8 +165,8 @@ sizesOpts =
 
 data EntryInfo = EntryInfo
     { _entryPath :: FilePath
-    , _entryCount :: Int
-    , _entryAllocSize :: Int
+    , _entryCount :: !Int
+    , _entryAllocSize :: !Int
     , _entryIsDir :: Bool
     }
     deriving (Show, Eq)
@@ -172,22 +176,47 @@ makeLenses ''EntryInfo
 -- Track (DeviceID, FileID) pairs to detect hard links
 type SeenInodes = Set.Set (DeviceID, FileID)
 
+-- | Stack-safe collection of entries retained for the final report.
+newtype ReportEntries = ReportEntries (Seq EntryInfo)
+
+-- | An empty report-entry collection.
+emptyReportEntries :: ReportEntries
+emptyReportEntries = ReportEntries Seq.empty
+
+-- | Materialize report entries in traversal order.
+reportEntriesToList :: ReportEntries -> [EntryInfo]
+reportEntriesToList (ReportEntries entries) = Foldable.toList entries
+
 newEntry :: FilePath -> Bool -> EntryInfo
 newEntry p = EntryInfo p 0 0
 
 instance Semigroup EntryInfo where
     x <> y =
-        seq x $
-            seq y $
-                entryCount +~ y ^. entryCount $
-                    entryAllocSize +~ y ^. entryAllocSize $
-                        x
+        let !count' = x ^. entryCount + y ^. entryCount
+            !allocSize' = x ^. entryAllocSize + y ^. entryAllocSize
+         in x
+                & entryCount .~ count'
+                & entryAllocSize .~ allocSize'
 
 instance Monoid EntryInfo where
     mempty = newEntry "" False
 
 instance NFData EntryInfo where
-    rnf a = a `seq` ()
+    rnf entry =
+        rnf (toTextIgnore (entry ^. entryPath)) `seq`
+            rnf (entry ^. entryCount) `seq`
+                rnf (entry ^. entryAllocSize) `seq`
+                    rnf (entry ^. entryIsDir)
+
+-- | Add one child aggregate and its retained descendants to a directory.
+combineEntryResults :: Bool -> (EntryInfo, ReportEntries) -> (EntryInfo, ReportEntries) -> (EntryInfo, ReportEntries)
+combineEntryResults keepReports (total, ReportEntries reports) (child, ReportEntries childReports) =
+    let total' = total <> child
+        reports' =
+            if keepReports
+                then ReportEntries ((reports Seq.|> child) Seq.>< childReports)
+                else emptyReportEntries
+     in total' `seq` reports' `seq` (total', reports')
 
 sizesMain :: IO ()
 sizesMain = do
@@ -222,7 +251,7 @@ reportSizes opts xs = do
     entryInfos <- parallel $ Prelude.map reportSizesForDir xs
     let infos =
             Prelude.map fst entryInfos
-                ++ DL.toList (DL.concat (Prelude.map snd entryInfos))
+                ++ Prelude.concatMap (reportEntriesToList . snd) entryInfos
         sorted =
             L.sortBy
                 ( (compare `on`) $
@@ -272,8 +301,8 @@ reportEntry bTen entry =
 toTextIgnore :: FilePath -> Text
 toTextIgnore = either id id . toText
 
-returnEmpty :: FilePath -> StateT SeenInodes IO (EntryInfo, DList EntryInfo)
-returnEmpty path = return (newEntry path False, DL.empty)
+returnEmpty :: FilePath -> StateT SeenInodes IO (EntryInfo, ReportEntries)
+returnEmpty path = return (newEntry path False, emptyReportEntries)
 
 {- | Decide whether an entry should be skipped because it lies on a different
 filesystem than the traversal root.  The second argument is the device of
@@ -285,7 +314,7 @@ crossesFileSystemBoundary False _ _ = False
 crossesFileSystemBoundary True Nothing _ = False
 crossesFileSystemBoundary True (Just rootDev) dev = dev /= rootDev
 
-gatherSizes :: SizesOpts -> Maybe DeviceID -> Int -> FilePath -> StateT SeenInodes IO (EntryInfo, DList EntryInfo)
+gatherSizes :: SizesOpts -> Maybe DeviceID -> Int -> FilePath -> StateT SeenInodes IO (EntryInfo, ReportEntries)
 gatherSizes opts mRootDev curDepth path = do
     excl <-
         if L.null (exclude opts)
@@ -318,15 +347,10 @@ gatherSizes opts mRootDev curDepth path = do
         | isDirectory status =
             foldM
                 ( \(y, ys) x -> do
-                    (x', xs') <- gatherSizes opts (Just (deviceID status)) (curDepth + 1) (collapse x)
-                    let x'' = y <> x'
-                        xs'' =
-                            if curDepth < depth opts
-                                then ys <> DL.singleton x' <> xs'
-                                else DL.empty
-                    return $! x'' `seq` xs'' `seq` (x'', xs'')
+                    child <- gatherSizes opts (Just (deviceID status)) (curDepth + 1) (collapse x)
+                    return $! combineEntryResults (curDepth < depth opts) (y, ys) child
                 )
-                (newEntry path True, DL.empty)
+                (newEntry path True, emptyReportEntries)
                 =<< liftIO (listDirectory path)
         | ( isRegularFile status
                 && not (annex opts && ".git/annex/" `isInfixOf` pathT)
@@ -386,7 +410,7 @@ gatherSizes opts mRootDev curDepth path = do
                     , _entryAllocSize = allocSize
                     , _entryIsDir = False
                     }
-                , DL.empty
+                , emptyReportEntries
                 )
         | otherwise = returnEmpty path
 

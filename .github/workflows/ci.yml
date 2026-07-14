@@ -28,4 +28,6 @@ jobs:
           nix build --no-link --no-warn-dirty --allow-import-from-derivation \
             .#checks.x86_64-linux.build \
             .#checks.x86_64-linux.format \
-            .#checks.x86_64-linux.lint
+            .#checks.x86_64-linux.lint \
+            .#checks.x86_64-linux.rts-defaults \
+            '.#checks.x86_64-linux."sizes:test:sizes-test"'

@@ -2,18 +2,43 @@
 
 module Main where
 
+import Control.Exception (bracket)
 import Control.Monad (unless)
+import qualified Data.List as List
 import Hedgehog
 import qualified Hedgehog.Gen as Gen
 import qualified Hedgehog.Range as Range
-import Sizes (EntryInfo (..), crossesFileSystemBoundary, humanReadable)
-import System.Exit (exitFailure)
+import Sizes (
+    EntryInfo (..),
+    combineEntryResults,
+    crossesFileSystemBoundary,
+    emptyReportEntries,
+    humanReadable,
+    reportEntriesToList,
+ )
+import System.Directory (createDirectory, getTemporaryDirectory, removeFile, removePathForcibly)
+import System.Exit (ExitCode (ExitSuccess), exitFailure)
+import System.FilePath ((</>))
+import System.IO (hClose, openTempFile)
 import System.Posix.Types (DeviceID)
+import System.Process (readProcessWithExitCode)
 
 main :: IO ()
 main = do
     passed <- checkParallel $$(discover)
     unless passed exitFailure
+
+-- | Allocate a unique scratch directory and remove it after the test.
+withScratchDirectory :: (FilePath -> IO a) -> IO a
+withScratchDirectory = bracket create removePathForcibly
+  where
+    create = do
+        temporaryRoot <- getTemporaryDirectory
+        (path, handle) <- openTempFile temporaryRoot "sizes-test"
+        hClose handle
+        removeFile path
+        createDirectory path
+        pure path
 
 -- | Generate an EntryInfo with random count and size.
 genEntryInfo :: Gen EntryInfo
@@ -80,6 +105,79 @@ prop_monoid_right_identity_size :: Property
 prop_monoid_right_identity_size = property $ do
     e <- forAll genEntryInfo
     _entryAllocSize (e <> mempty) === _entryAllocSize e
+
+-- Wide directory aggregation must not require stack proportional to entry count.
+prop_wide_directory_aggregation_stack_safe :: Property
+prop_wide_directory_aggregation_stack_safe =
+    withTests 1 . property $ do
+        let entryCount = 200000
+            leaf = mempty{_entryCount = 1, _entryAllocSize = 2}
+            step aggregate _ =
+                combineEntryResults
+                    True
+                    aggregate
+                    (leaf, emptyReportEntries)
+            (total, reports) =
+                List.foldl'
+                    step
+                    (mempty, emptyReportEntries)
+                    [1 .. entryCount]
+        _entryCount total === entryCount
+        _entryAllocSize total === 2 * entryCount
+        length (reportEntriesToList reports) === entryCount
+
+-- Report accumulation preserves sibling/preorder content and drops it past depth.
+prop_report_entries_preserve_preorder :: Property
+prop_report_entries_preserve_preorder =
+    withTests 1 . property $ do
+        let first = mempty{_entryCount = 1, _entryAllocSize = 10}
+            child = mempty{_entryCount = 2, _entryAllocSize = 20}
+            grandchild = mempty{_entryCount = 3, _entryAllocSize = 30}
+            firstResult =
+                combineEntryResults
+                    True
+                    (mempty, emptyReportEntries)
+                    (first, emptyReportEntries)
+            (_, grandchildReports) =
+                combineEntryResults
+                    True
+                    (mempty, emptyReportEntries)
+                    (grandchild, emptyReportEntries)
+            (_, retained) =
+                combineEntryResults
+                    True
+                    firstResult
+                    (child, grandchildReports)
+            (_, dropped) =
+                combineEntryResults
+                    False
+                    firstResult
+                    (child, grandchildReports)
+            entryIdentity entry = (_entryCount entry, _entryAllocSize entry)
+        fmap entryIdentity (reportEntriesToList retained)
+            === [(1, 10), (2, 20), (3, 30)]
+        reportEntriesToList dropped === []
+
+-- The packaged executable traverses a real nested tree in report preorder.
+prop_cli_traverses_nested_directory :: Property
+prop_cli_traverses_nested_directory =
+    withTests 1 . property $ do
+        (root, child, file, exitCode, stdout, stderr) <- evalIO $
+            withScratchDirectory $ \root -> do
+                let child = root </> "child"
+                    file = child </> "file"
+                createDirectory child
+                writeFile file "abc"
+                (exitCode, stdout, stderr) <-
+                    readProcessWithExitCode
+                        "sizes"
+                        ["-j1", "-a", "-s", "-d3", root]
+                        ""
+                pure (root, child, file, exitCode, stdout, stderr)
+        annotate stderr
+        exitCode === ExitSuccess
+        fmap (last . words) (lines stdout)
+            === [root ++ "/", child ++ "/", file]
 
 -- humanReadable always returns a non-empty string
 prop_humanReadable_nonempty :: Property

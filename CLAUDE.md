@@ -61,10 +61,10 @@ cabal install --installdir=$HOME/.local/bin
    - Uses hsc2hs preprocessor for cross-platform compatibility
    - Key function: `fileBlockSize` retrieves allocated block count
 
-2. **Core Logic** (`Main.hs`)
+2. **Core Logic** (`Sizes.hs`)
    - `gatherSizes`: Recursive directory traversal with monadic accumulation
    - `EntryInfo`: Monoid for compositional aggregation of directory stats
-   - Uses DList for O(n) list building during recursion
+   - Uses `Data.Sequence` for stack-safe report accumulation during recursion
    - Parallel processing of top-level directories via `parallel-io`
 
 3. **CLI Interface**
@@ -75,8 +75,8 @@ cabal install --installdir=$HOME/.local/bin
 
 - **Monoid Composition**: `EntryInfo` instances combine directory statistics
 - **Lens-based Access**: Template Haskell generates lenses for clean field access
-- **Strict Evaluation**: Explicit `seq` and bang patterns prevent space leaks
-- **Difference Lists**: DList accumulation avoids O(n²) concatenation
+- **Strict Totals**: Strict numeric fields and bang patterns prevent count/size thunk chains
+- **Finger Trees**: `Data.Sequence` supports stack-safe append and concatenation
 
 ### Git-annex Integration
 
@@ -87,29 +87,28 @@ When `--annex` flag is set:
 
 ## Known Issues & TODOs
 
-1. **Partial Function** (Main.hs:178): Uses `L.last` without empty check - could crash on empty paths
-2. **unsafeCoerce Hack** (Main.hs:240): Coerces between FileStatus types for FFI
-3. **Hard Links TODO** (Main.hs:8): Need to track device/inode pairs to count hard links only once
-4. **Error Output** (Main.hs:199): Errors print to stdout instead of stderr
-5. **Regex Compilation** (Main.hs:191): Compiles regex on every file (performance issue)
-6. **Tight Dependencies**: Very narrow version bounds in cabal file may cause build issues
+1. **Partial Function** (`reportEntry`): Uses `L.last` without an empty-path check
+2. **unsafeCoerce Hack** (`gatherSizes`): Coerces between file-status types for FFI
+3. **Error Output** (`gatherSizes`): Recoverable I/O errors print to stdout
+4. **Regex Compilation** (`gatherSizes`): Compiles the exclusion regex for every path
+5. **Tight Dependencies**: Very narrow version bounds in the Cabal file may cause build issues
 
 ## Critical Code Locations
 
-- **Main traversal logic**: `gatherSizes` at Main.hs:186-254
-- **Parallel execution setup**: Main.hs:121 and Main.hs:147
-- **FFI block size access**: Stat.hsc:44-46 and Main.hs:240
-- **Git-annex handling**: Main.hs:217-237
-- **Entry filtering logic**: `reportEntryP` at Main.hs:131-138
-- **Human-readable formatting**: `humanReadable` at Main.hs:156-165
+- **Main traversal logic**: `gatherSizes` in `Sizes.hs`
+- **Parallel execution setup**: `sizesMain` and `reportSizes` in `Sizes.hs`
+- **FFI block size access**: `fileBlockSize` in `Stat.hsc` and `gatherSizes`
+- **Git-annex handling**: `gatherSizes` in `Sizes.hs`
+- **Entry filtering logic**: `reportEntryP` in `Sizes.hs`
+- **Human-readable formatting**: `humanReadable` in `Sizes.hs`
 
 ## Performance Considerations
 
 - Accumulates all reportable entries in memory before sorting
 - Uses parallel-io for concurrent processing of top-level directories
-- Default stack size increased to 64MB (`-K64M`) to handle deep directory trees
-- Strict evaluation throughout prevents thunk accumulation
-- DList prevents quadratic list concatenation complexity
+- Uses GHC's platform-aware stack limit instead of imposing a fixed maximum
+- Strict numeric aggregation prevents count/size thunk accumulation
+- `Data.Sequence` prevents linear-stack report-list realization
 
 ## Dependencies with Specific Concerns
 

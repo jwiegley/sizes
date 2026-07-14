@@ -62,6 +62,40 @@
             touch $out
           '';
 
+          rts-defaults = pkgs.runCommand "sizes-rts-defaults-check" {
+            nativeBuildInputs = [ pkgs.gnugrep ];
+          } ''
+            exe='${flake.packages."sizes:exe:sizes"}/bin/sizes'
+            unset GHCRTS
+            export LC_ALL=C
+
+            if ! rts_info="$("$exe" +RTS --info -RTS 2>&1)"; then
+              printf '%s\n' 'sizes +RTS --info -RTS failed:' >&2
+              printf '%s\n' "$rts_info" >&2
+              exit 1
+            fi
+
+            with_rtsopts_line="$(
+              printf '%s\n' "$rts_info" |
+                grep -F '"Flag -with-rtsopts"' || true
+            )"
+
+            if [ -z "$with_rtsopts_line" ]; then
+              printf '%s\n' 'RTS --info did not report Flag -with-rtsopts' >&2
+              printf '%s\n' "$rts_info" >&2
+              exit 1
+            fi
+
+            case "$with_rtsopts_line" in
+              *-K*)
+                printf '%s\n' "unexpected baked-in stack limit: $with_rtsopts_line" >&2
+                exit 1
+                ;;
+            esac
+
+            touch "$out"
+          '';
+
           lint = pkgs.runCommand "lint-check" {
             nativeBuildInputs = [ pkgs.haskellPackages.hlint ];
           } ''
