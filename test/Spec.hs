@@ -179,6 +179,64 @@ prop_cli_traverses_nested_directory =
         fmap (last . words) (lines stdout)
             === [root ++ "/", child ++ "/", file]
 
+-- A single -x pattern excludes matching paths but keeps the rest.
+prop_cli_single_exclude_filters :: Property
+prop_cli_single_exclude_filters =
+    withTests 1 . property $ do
+        (exitCode, stdout, stderr) <- evalIO $
+            withScratchDirectory $ \root -> do
+                let keepDir = root </> "keep"
+                    dropDir = root </> "drop-me"
+                mapM_
+                    (\dir -> createDirectory dir >> writeFile (dir </> "marker") "x")
+                    [keepDir, dropDir]
+                readProcessWithExitCode
+                    "sizes"
+                    ["-j1", "-a", "-s", "-d3", "-x", "drop-me", root]
+                    ""
+        annotate stderr
+        exitCode === ExitSuccess
+        let reported = map (last . words) (lines stdout)
+        annotate (unlines reported)
+        assert $ any (List.isSuffixOf "keep/marker") reported
+        assert $ not $ any (List.isSuffixOf "drop-me/marker") reported
+
+-- Repeated -x flags accumulate: every provided pattern excludes its matches,
+-- not just the last one.
+prop_cli_multiple_excludes_accumulate :: Property
+prop_cli_multiple_excludes_accumulate =
+    withTests 1 . property $ do
+        (exitCode, stdout, stderr) <- evalIO $
+            withScratchDirectory $ \root -> do
+                let keepDir = root </> "keep"
+                    firstDir = root </> "drop-first"
+                    secondDir = root </> "drop-second"
+                mapM_
+                    (\dir -> createDirectory dir >> writeFile (dir </> "marker") "x")
+                    [keepDir, firstDir, secondDir]
+                readProcessWithExitCode
+                    "sizes"
+                    [ "-j1"
+                    , "-a"
+                    , "-s"
+                    , "-d3"
+                    , "-x"
+                    , "drop-first"
+                    , "-x"
+                    , "drop-second"
+                    , root
+                    ]
+                    ""
+        annotate stderr
+        exitCode === ExitSuccess
+        let reported = map (last . words) (lines stdout)
+        annotate (unlines reported)
+        -- The first -x pattern must still exclude: both flags accumulate
+        -- rather than the last one winning.
+        assert $ any (List.isSuffixOf "keep/marker") reported
+        assert $ not $ any (List.isSuffixOf "drop-first/marker") reported
+        assert $ not $ any (List.isSuffixOf "drop-second/marker") reported
+
 -- humanReadable always returns a non-empty string
 prop_humanReadable_nonempty :: Property
 prop_humanReadable_nonempty = property $ do

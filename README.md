@@ -36,6 +36,9 @@ sizes -j4 /path/to/dir
 # Exclude paths matching a regex
 sizes -x '\.cache' /path/to/dir
 
+# Exclude paths matching any of several regexes (repeat -x)
+sizes -x '\.cache' -x '\.git' /path/to/dir
+
 # Stay on one filesystem (skip mounted volumes, NFS/SMB shares, etc.)
 sizes -X /path/to/dir
 
@@ -70,7 +73,7 @@ sizes -s /path/to/dir
 | `-A` | Git-annex aware |
 | `--apparent` | Apparent sizes, not disk blocks |
 | `-H` | Base-10 (MB/GB) |
-| `-x REGEX` | Exclude matching paths |
+| `-x REGEX` | Exclude matching paths; repeatable |
 | `-m INT` | Minimum size in MB (default: 10) |
 | `-M INT` | Minimum file count (default: 100) |
 | `-B INT` | Block size in bytes (default: 512) |

@@ -50,6 +50,8 @@ import GHC.Conc
 import Stat
 import System.Console.CmdArgs
 import System.Environment (getArgs, withArgs)
+import System.Exit (ExitCode (ExitFailure), exitWith)
+import System.IO (hPutStrLn, stderr)
 import System.Posix.Files hiding (fileBlockSize)
 import System.Posix.Types (DeviceID, FileID)
 import Text.Printf
@@ -60,7 +62,7 @@ import Prelude hiding (FilePath, sequence)
 default (Integer, Text)
 
 version :: String
-version = "2.4.3"
+version = "2.4.4"
 
 copyright :: String
 copyright = "2012-2026"
@@ -74,7 +76,7 @@ data SizesOpts = SizesOpts
     , annex :: Bool
     , apparent :: Bool
     , baseTen :: Bool
-    , exclude :: String
+    , exclude :: [String]
     , minSize :: Int
     , minCount :: Int
     , blockSize :: Int
@@ -118,7 +120,7 @@ sizesOpts =
             def
                 &= name "x"
                 &= typ "REGEX"
-                &= help "Exclude files whose path matches the REGEX"
+                &= help "Exclude files whose path matches any of the REGEXes (repeatable)"
         , minSize =
             def
                 &= name "m"
@@ -248,7 +250,8 @@ reportEntryP opts entry =
 
 reportSizes :: SizesOpts -> [FilePath] -> IO ()
 reportSizes opts xs = do
-    entryInfos <- parallel $ Prelude.map reportSizesForDir xs
+    excludes <- compileExcludes (exclude opts)
+    entryInfos <- parallel $ Prelude.map (reportSizesForDir excludes) xs
     let infos =
             Prelude.map fst entryInfos
                 ++ Prelude.concatMap (reportEntriesToList . snd) entryInfos
@@ -264,14 +267,28 @@ reportSizes opts xs = do
         (reportEntry (baseTen opts))
         (Prelude.filter (reportEntryP opts) sorted)
   where
-    reportSizesForDir dir =
+    reportSizesForDir excludes dir =
         -- fsStatus <- getFilesystemStatus (E.encodeUtf8 (toTextIgnore dir))
         let fsBlkSize = statBlockSize -- filesystemBlockSize fsStatus
             opts' =
                 if blockSize opts == 0
                     then opts{blockSize = fromIntegral fsBlkSize}
                     else opts
-         in fst <$> runStateT (gatherSizes opts' Nothing 0 dir) Set.empty
+         in fst <$> runStateT (gatherSizes opts' excludes Nothing 0 dir) Set.empty
+
+{- | Compile the exclusion patterns once, up front.  An invalid pattern is a
+fatal startup error rather than a silent per-path failure.
+-}
+compileExcludes :: [String] -> IO [Regex]
+compileExcludes = mapM compileOne
+  where
+    compileOne regex = do
+        compiled <- try (makeRegexM regex)
+        case compiled of
+            Left ex -> do
+                hPutStrLn stderr $ "invalid exclusion regex " ++ Prelude.show regex ++ ": " ++ Prelude.show (ex :: SomeException)
+                exitWith (ExitFailure 1)
+            Right r -> pure r
 
 humanReadable :: Int -> Int -> String
 humanReadable x d
@@ -314,16 +331,15 @@ crossesFileSystemBoundary False _ _ = False
 crossesFileSystemBoundary True Nothing _ = False
 crossesFileSystemBoundary True (Just rootDev) dev = dev /= rootDev
 
-gatherSizes :: SizesOpts -> Maybe DeviceID -> Int -> FilePath -> StateT SeenInodes IO (EntryInfo, ReportEntries)
-gatherSizes opts mRootDev curDepth path = do
-    excl <-
-        if L.null (exclude opts)
-            then return $ Right False
-            else liftIO $ try $ return $ path' =~ exclude opts -- jww (2013-08-15): poor
-    case excl of
-        Left (_ :: SomeException) -> returnEmpty path
-        Right True -> returnEmpty path
-        _ ->
+-- | Decide whether a path matches any of the compiled exclusion patterns.
+excludePath :: [Regex] -> String -> Bool
+excludePath patterns path = L.any (`match` path) patterns
+
+gatherSizes :: SizesOpts -> [Regex] -> Maybe DeviceID -> Int -> FilePath -> StateT SeenInodes IO (EntryInfo, ReportEntries)
+gatherSizes opts excludes mRootDev curDepth path =
+    if excludePath excludes path'
+        then returnEmpty path
+        else
             ( do
                 status <-
                     liftIO
@@ -347,7 +363,7 @@ gatherSizes opts mRootDev curDepth path = do
         | isDirectory status =
             foldM
                 ( \(y, ys) x -> do
-                    child <- gatherSizes opts (Just (deviceID status)) (curDepth + 1) (collapse x)
+                    child <- gatherSizes opts excludes (Just (deviceID status)) (curDepth + 1) (collapse x)
                     return $! combineEntryResults (curDepth < depth opts) (y, ys) child
                 )
                 (newEntry path True, emptyReportEntries)
